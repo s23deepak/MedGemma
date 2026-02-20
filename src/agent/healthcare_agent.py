@@ -65,6 +65,7 @@ class HealthcareAgent:
         self.simulated = simulated
         self.function_agent = None
         self.medical_agent = None
+        self.patient_memory = None
         self.tools: dict[str, Callable] = {}
         
         if not simulated:
@@ -72,6 +73,9 @@ class HealthcareAgent:
                 self._load_function_agent(use_vllm)
             if load_medgemma:
                 self._load_medical_agent(use_vllm)
+        
+        # Initialize patient memory (Mem0)
+        self._init_patient_memory()
         
         # Register default healthcare tools
         self._register_default_tools()
@@ -102,6 +106,16 @@ class HealthcareAgent:
         except Exception as e:
             logger.warning(f"Could not load MedGemma: {e}")
     
+    def _init_patient_memory(self):
+        """Initialize Mem0 patient memory (lazy, non-blocking)."""
+        try:
+            from src.memory.patient_memory import get_patient_memory, is_mem0_available
+            if is_mem0_available():
+                self.patient_memory = get_patient_memory()
+                logger.info("Patient memory (Mem0) initialized")
+        except Exception as e:
+            logger.warning(f"Patient memory unavailable: {e}")
+    
     def _register_default_tools(self):
         """Register default healthcare tool handlers."""
         # These are placeholder implementations
@@ -115,6 +129,8 @@ class HealthcareAgent:
         self.register_tool("check_drug_interactions", self._tool_check_interactions)
         self.register_tool("retrieve_prior_imaging", self._tool_retrieve_imaging)
         self.register_tool("update_ehr", self._tool_update_ehr)
+        self.register_tool("recall_patient_memory", self._tool_recall_memory)
+        self.register_tool("save_patient_memory", self._tool_save_memory)
     
     def register_tool(self, name: str, handler: Callable):
         """Register a tool with its handler function."""
@@ -348,6 +364,49 @@ class HealthcareAgent:
             "message": "EHR update queued for physician approval"
         }
     
+    def _tool_recall_memory(
+        self,
+        patient_id: str,
+        query: str
+    ) -> dict:
+        """Search persistent patient memory (Mem0)."""
+        if not self.patient_memory:
+            return {"error": "Patient memory not available", "memories": []}
+        
+        try:
+            memories = self.patient_memory.recall(patient_id, query)
+            return {
+                "patient_id": patient_id,
+                "query": query,
+                "memories": memories,
+                "count": len(memories)
+            }
+        except Exception as e:
+            return {"error": str(e), "memories": []}
+    
+    def _tool_save_memory(
+        self,
+        patient_id: str,
+        note: str,
+        category: str = "general"
+    ) -> dict:
+        """Save a clinical note to patient memory (Mem0)."""
+        if not self.patient_memory:
+            return {"error": "Patient memory not available"}
+        
+        try:
+            result = self.patient_memory.add_clinical_note(
+                patient_id, note, category=category
+            )
+            return {
+                "status": "saved",
+                "patient_id": patient_id,
+                "category": category,
+                "result": result
+            }
+        except Exception as e:
+            return {"error": str(e)}
+    
     # ==================== Helper Methods ====================
     
     def _build_context(
@@ -355,11 +414,13 @@ class HealthcareAgent:
         patient_context: dict | None,
         image_path: str | None = None
     ) -> str:
-        """Build context string from available data."""
+        """Build context string from available data, including Mem0 memories."""
         parts = []
+        patient_id = None
         
         if patient_context:
             patient = patient_context.get("patient", {})
+            patient_id = patient.get("id")
             parts.append(f"Patient: {patient.get('name', 'Unknown')}, {patient.get('age', '?')} y/o")
             
             conditions = patient_context.get("conditions", [])
@@ -374,6 +435,15 @@ class HealthcareAgent:
         
         if image_path:
             parts.append(f"Medical image available: {image_path}")
+        
+        # Inject Mem0 patient memories
+        if patient_id and self.patient_memory:
+            try:
+                memory_summary = self.patient_memory.build_context_summary(patient_id)
+                if "No prior memories" not in memory_summary:
+                    parts.append(f"\n{memory_summary}")
+            except Exception as e:
+                logger.debug(f"Could not load patient memories: {e}")
         
         return "; ".join(parts) if parts else "No context available"
     

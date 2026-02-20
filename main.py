@@ -550,14 +550,90 @@ async def get_portal_query_history(patient_id: str):
     return {"queries": assistant.get_query_history(patient_id)}
 
 
+# ============================================================
+# Patient Memory API endpoints (Mem0)
+# ============================================================
+
+@app.get("/api/memory/{patient_id}")
+async def get_patient_memories(patient_id: str):
+    """Get all persistent memories for a patient."""
+    try:
+        from src.memory.patient_memory import get_patient_memory
+        pm = get_patient_memory()
+        memories = pm.get_all(patient_id)
+        return {
+            "patient_id": patient_id,
+            "memories": memories,
+            "count": len(memories)
+        }
+    except Exception as e:
+        return {"error": str(e), "memories": []}
+
+
+@app.post("/api/memory/{patient_id}/search")
+async def search_patient_memories(patient_id: str, request: Request):
+    """Semantic search through patient memories."""
+    try:
+        body = await request.json()
+        query = body.get("query", "")
+        limit = body.get("limit", 10)
+        
+        from src.memory.patient_memory import get_patient_memory
+        pm = get_patient_memory()
+        results = pm.recall(patient_id, query, limit=limit)
+        return {
+            "patient_id": patient_id,
+            "query": query,
+            "results": results,
+            "count": len(results)
+        }
+    except Exception as e:
+        return {"error": str(e), "results": []}
+
+
+@app.post("/api/memory/{patient_id}/add")
+async def add_patient_memory(patient_id: str, request: Request):
+    """Add a clinical note to patient memory."""
+    try:
+        body = await request.json()
+        note = body.get("note", "")
+        category = body.get("category", "general")
+        
+        from src.memory.patient_memory import get_patient_memory
+        pm = get_patient_memory()
+        result = pm.add_clinical_note(patient_id, note, category=category)
+        return {
+            "status": "saved",
+            "patient_id": patient_id,
+            "category": category,
+            "result": result
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.delete("/api/memory/{patient_id}/{memory_id}")
+async def delete_patient_memory(patient_id: str, memory_id: str):
+    """Delete a specific patient memory."""
+    try:
+        from src.memory.patient_memory import get_patient_memory
+        pm = get_patient_memory()
+        result = pm.delete_memory(memory_id)
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
+    from src.memory.patient_memory import is_mem0_available
     return {
         "status": "healthy",
         "agent_loaded": agent is not None,
         "asr_loaded": asr is not None,
-        "fhir_server": fhir_server is not None
+        "fhir_server": fhir_server is not None,
+        "mem0_available": is_mem0_available()
     }
 
 

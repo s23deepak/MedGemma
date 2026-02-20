@@ -303,6 +303,54 @@ TOOLS = [
                 "required": ["reason"]
             }
         }
+    },
+    # ==================== Patient Memory Tools (Mem0) ====================
+    {
+        "type": "function",
+        "function": {
+            "name": "recall_patient_memory",
+            "description": "Search persistent memory for a patient's history, preferences, allergies, medications, diagnoses, and past clinical notes. Uses semantic search powered by Mem0.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_id": {
+                        "type": "string",
+                        "description": "The unique patient identifier"
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "What to search for (e.g., 'allergies', 'cardiac history', 'medication list')"
+                    }
+                },
+                "required": ["patient_id", "query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_patient_memory",
+            "description": "Save a clinical note or fact to a patient's persistent memory. The memory system automatically extracts and stores relevant clinical facts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_id": {
+                        "type": "string",
+                        "description": "The unique patient identifier"
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Clinical note or fact to store (e.g., 'Patient is allergic to penicillin')"
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["allergy", "medication", "diagnosis", "procedure", "preference", "social_history", "critical_alert", "general"],
+                        "description": "Category of the clinical fact"
+                    }
+                },
+                "required": ["patient_id", "note"]
+            }
+        }
     }
 ]
 
