@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOAP Compliance Monitor - MedGemma</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        .compliance-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+        }
+
+        .stat-good {
+            color: #10b981;
+        }
+
+        .stat-warning {
+            color: #f59e0b;
+        }
+
+        .stat-critical {
+            color: #ef4444;
+        }
+
+        .compliance-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .last-check {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .btn-check {
+            padding: 0.75rem 1.5rem;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-family: inherit;
+        }
+
+        .btn-check:hover {
+            background: var(--primary-dark);
+        }
+
+        .flags-section {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .flags-section h2 {
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .flag-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 0.75rem;
+        }
+
+        .flag-critical {
+            background: rgba(239, 68, 68, 0.1);
+            border-left: 4px solid #ef4444;
+        }
+
+        .flag-warning {
+            background: rgba(245, 158, 11, 0.1);
+            border-left: 4px solid #f59e0b;
+        }
+
+        .flag-info {
+            background: rgba(59, 130, 246, 0.1);
+            border-left: 4px solid #3b82f6;
+        }
+
+        .flag-icon {
+            font-size: 1.5rem;
+        }
+
+        .flag-content {
+            flex: 1;
+        }
+
+        .flag-title {
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .flag-description {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .flag-meta {
+            display: flex;
+            gap: 1rem;
+            margin-top: 0.5rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .compliant-list {
+            display: grid;
+            gap: 0.75rem;
+        }
+
+        .compliant-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem;
+            background: rgba(16, 185, 129, 0.1);
+            border-radius: 8px;
+        }
+
+        .compliant-item .check {
+            color: #10b981;
+            font-size: 1.25rem;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="header-left">
+                <a href="/" class="logo" style="text-decoration:none;">
+                    <span class="logo-icon">🏥</span>
+                    <span class="logo-text">MedGemma</span>
+                </a>
+                <div class="nav-links">
+                    <a href="/">Encounters</a>
+                    <a href="/history">Patient History</a>
+                    <a href="/compliance" class="active">Compliance</a>
+                    <a href="/council">Diagnostic Council</a>
+                    <a href="/patient-portal">Patient Portal</a>
+                </div>
+            </div>
+            <div class="nav-user">
+                <span id="userRole">👤 Admin</span>
+            </div>
+        </header>
+
+        <main class="compliance-container">
+            <div class="compliance-header">
+                <div>
+                    <h1>✅ SOAP Compliance Monitor</h1>
+                    <p class="last-check">Last check: <span id="lastCheckTime">Never</span></p>
+                </div>
+                <button class="btn-check" onclick="runComplianceCheck()">🔄 Run Check Now</button>
+            </div>
+
+            <section class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value stat-good" id="complianceRate">--</div>
+                    <div class="stat-label">Compliance Rate</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="totalDocs">--</div>
+                    <div class="stat-label">Total Documents</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value stat-good" id="compliantCount">--</div>
+                    <div class="stat-label">Compliant</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value stat-warning" id="flaggedCount">--</div>
+                    <div class="stat-label">Flagged</div>
+                </div>
+            </section>
+
+            <section class="flags-section">
+                <h2>🚩 Flagged Documents</h2>
+                <div id="flagsList">
+                    <p style="color: var(--text-secondary);">Run a compliance check to see flagged documents</p>
+                </div>
+            </section>
+
+            <section class="flags-section">
+                <h2>✅ Compliant Documents</h2>
+                <div id="compliantList" class="compliant-list">
+                    <p style="color: var(--text-secondary);">Run a compliance check to see compliant documents</p>
+                </div>
+            </section>
+        </main>
+
+        <script>
+            async function runComplianceCheck() {
+                try {
+                    const response = await fetch('/api/compliance/check', { method: 'POST' });
+                    const data = await response.json();
+                    renderComplianceReport(data);
+                } catch (error) {
+                    console.error('Error running compliance check:', error);
+                }
+            }
+
+            function renderComplianceReport(report) {
+                document.getElementById('complianceRate').textContent = report.compliance_rate + '%';
+                document.getElementById('totalDocs').textContent = report.total_documents;
+                document.getElementById('compliantCount').textContent = report.compliant_count;
+                document.getElementById('flaggedCount').textContent = report.flagged_count;
+                document.getElementById('lastCheckTime').textContent = report.check_time_display;
+
+                const rateEl = document.getElementById('complianceRate');
+                rateEl.className = 'stat-value ' + (report.compliance_rate >= 80 ? 'stat-good' : report.compliance_rate >= 60 ? 'stat-warning' : 'stat-critical');
+
+                const flagsList = document.getElementById('flagsList');
+                if (report.flags && report.flags.length > 0) {
+                    flagsList.innerHTML = report.flags.map(flag => `
+                    <div class="flag-item flag-${flag.severity}">
+                        <span class="flag-icon">${flag.severity === 'critical' ? '🔴' : flag.severity === 'warning' ? '🟡' : '🔵'}</span>
+                        <div class="flag-content">
+                            <div class="flag-title">${flag.title}</div>
+                            <div class="flag-description">${flag.description}</div>
+                            <div class="flag-meta">
+                                <span>👤 ${flag.patient_name}</span>
+                                <span>📄 ${flag.soap_id}</span>
+                                ${flag.duration_days ? `<span>⏱️ ${flag.duration_days} days</span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+                } else {
+                    flagsList.innerHTML = '<p style="color: #10b981;">✅ No compliance issues found!</p>';
+                }
+
+                const compliantList = document.getElementById('compliantList');
+                if (report.compliant_documents && report.compliant_documents.length > 0) {
+                    compliantList.innerHTML = report.compliant_documents.map(doc => `
+                    <div class="compliant-item">
+                        <span class="check">✓</span>
+                        <div>
+                            <strong>${doc.patient_name}</strong> - ${doc.soap_id}
+                            <div style="font-size: 0.85rem; color: var(--text-secondary);">Last updated: ${doc.last_updated}</div>
+                        </div>
+                    </div>
+                `).join('');
+                }
+            }
+
+            document.addEventListener('DOMContentLoaded', runComplianceCheck);
+        </script>
+</body>
+
+</html>

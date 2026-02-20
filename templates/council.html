@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diagnostic Council - MedGemma</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        .council-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .case-input {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .case-input h2 {
+            margin-bottom: 1rem;
+        }
+
+        .input-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .input-group {
+            margin-bottom: 1rem;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+
+        .input-group input,
+        .input-group textarea,
+        .input-group select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: inherit;
+        }
+
+        .input-group textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .btn-deliberate {
+            width: 100%;
+            padding: 1rem;
+            background: linear-gradient(135deg, var(--primary), #7c3aed);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-top: 1rem;
+            font-family: inherit;
+        }
+
+        .btn-deliberate:hover {
+            opacity: 0.9;
+        }
+
+        .btn-deliberate:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .consensus-card {
+            background: linear-gradient(135deg, #059669, #10b981);
+            color: white;
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+
+        .consensus-diagnosis {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .consensus-meta {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-top: 1rem;
+        }
+
+        .consensus-badge {
+            padding: 0.5rem 1rem;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+        }
+
+        .opinions-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .opinion-card {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.25rem;
+            border: 2px solid transparent;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .opinion-card.agreed {
+            border-color: #10b981;
+        }
+
+        .opinion-card.dissented {
+            border-color: #f59e0b;
+        }
+
+        .opinion-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .opinion-id {
+            font-weight: 600;
+            color: var(--primary);
+        }
+
+        .confidence-bar {
+            height: 8px;
+            background: var(--border);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: var(--primary);
+            transition: width 0.3s;
+        }
+
+        .opinion-diagnosis {
+            font-weight: 600;
+            margin: 0.75rem 0;
+        }
+
+        .opinion-reasoning {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.75rem;
+        }
+
+        .opinion-tests {
+            font-size: 0.85rem;
+        }
+
+        .opinion-tests span {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            background: var(--bg-primary);
+            border-radius: 4px;
+            margin: 0.25rem 0.25rem 0 0;
+        }
+
+        .discussion-section {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .discussion-section h2 {
+            margin-bottom: 1rem;
+        }
+
+        .discussion-content {
+            line-height: 1.7;
+        }
+
+        .discussion-content strong {
+            color: var(--primary);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 3rem;
+        }
+
+        .loading .spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .urgency-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .urgency-emergent {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        .urgency-urgent {
+            background: #fef3c7;
+            color: #d97706;
+        }
+
+        .urgency-routine {
+            background: #d1fae5;
+            color: #059669;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="header-left">
+                <a href="/" class="logo" style="text-decoration:none;">
+                    <span class="logo-icon">🏥</span>
+                    <span class="logo-text">MedGemma</span>
+                </a>
+                <div class="nav-links">
+                    <a href="/">Encounters</a>
+                    <a href="/history">Patient History</a>
+                    <a href="/compliance">Compliance</a>
+                    <a href="/council" class="active">Diagnostic Council</a>
+                    <a href="/patient-portal">Patient Portal</a>
+                </div>
+            </div>
+            <div class="nav-user">
+                <span id="userRole">👤 Doctor</span>
+            </div>
+        </header>
+
+        <main class="council-container">
+            <h1>🧠 Diagnostic Council</h1>
+            <p style="color: var(--text-secondary); margin-bottom: 2rem;">Multi-rollout AI deliberation for complex
+                diagnoses</p>
+
+            <section class="case-input">
+                <h2>📋 Case Information</h2>
+                <div class="input-grid">
+                    <div class="input-group">
+                        <label>Presenting Symptoms (comma-separated)</label>
+                        <input type="text" id="symptoms" placeholder="e.g., chest pain, shortness of breath, fatigue">
+                    </div>
+                    <div class="input-group">
+                        <label>Patient History</label>
+                        <input type="text" id="history" placeholder="e.g., 65yo male, HTN, DM, former smoker">
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Imaging Findings (if available)</label>
+                    <textarea id="imaging" placeholder="e.g., CXR shows bilateral infiltrates..."></textarea>
+                </div>
+                <div class="input-grid">
+                    <div class="input-group">
+                        <label>Number of AI Opinions</label>
+                        <select id="numRollouts">
+                            <option value="3">3 opinions</option>
+                            <option value="5" selected>5 opinions</option>
+                            <option value="7">7 opinions</option>
+                        </select>
+                    </div>
+                    <div class="input-group">
+                        <label>Vitals (optional)</label>
+                        <input type="text" id="vitals" placeholder="e.g., BP 140/90, HR 95, SpO2 94%">
+                    </div>
+                </div>
+                <button class="btn-deliberate" id="deliberateBtn" onclick="startDeliberation()">
+                    🧠 Start Council Deliberation
+                </button>
+            </section>
+
+            <section id="results" style="display: none;">
+                <div id="loading" class="loading">
+                    <div class="spinner"></div>
+                    <p>The council is deliberating...</p>
+                </div>
+
+                <div id="deliberationResults" style="display: none;">
+                    <div id="consensusCard" class="consensus-card">
+                        <div style="font-size: 0.9rem; opacity: 0.9; margin-bottom: 0.5rem;">CONSENSUS DIAGNOSIS</div>
+                        <div class="consensus-diagnosis" id="consensusDiagnosis">--</div>
+                        <div class="consensus-meta">
+                            <span class="consensus-badge" id="consensusStrength">-- consensus</span>
+                            <span class="consensus-badge" id="consensusConfidence">--% confidence</span>
+                        </div>
+                    </div>
+
+                    <h2 style="margin-bottom: 1rem;">🗳️ Individual Opinions</h2>
+                    <div id="opinionsGrid" class="opinions-grid"></div>
+
+                    <div id="discussionSection" class="discussion-section">
+                        <h2>💬 Discussion Summary</h2>
+                        <div id="discussionContent" class="discussion-content"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <script>
+            async function startDeliberation() {
+                const symptoms = document.getElementById('symptoms').value.split(',').map(s => s.trim()).filter(s => s);
+                const history = document.getElementById('history').value;
+                const imaging = document.getElementById('imaging').value;
+                const numRollouts = parseInt(document.getElementById('numRollouts').value);
+                const vitals = document.getElementById('vitals').value;
+
+                if (symptoms.length === 0) {
+                    alert('Please enter at least one symptom');
+                    return;
+                }
+
+                document.getElementById('results').style.display = 'block';
+                document.getElementById('loading').style.display = 'block';
+                document.getElementById('deliberationResults').style.display = 'none';
+                document.getElementById('deliberateBtn').disabled = true;
+
+                try {
+                    const response = await fetch('/api/council/deliberate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ symptoms, patient_history: history, imaging_findings: imaging, num_rollouts: numRollouts, vitals })
+                    });
+                    const data = await response.json();
+                    renderDeliberation(data);
+                } catch (error) {
+                    console.error('Error:', error);
+                    alert('Error running deliberation');
+                } finally {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('deliberateBtn').disabled = false;
+                }
+            }
+
+            function renderDeliberation(data) {
+                document.getElementById('deliberationResults').style.display = 'block';
+                document.getElementById('consensusDiagnosis').textContent = data.consensus_diagnosis;
+                document.getElementById('consensusStrength').textContent = data.consensus_strength + ' consensus';
+                document.getElementById('consensusConfidence').textContent = data.consensus_confidence_percent + ' confidence';
+
+                const consensusCard = document.getElementById('consensusCard');
+                if (data.consensus_strength === 'strong') {
+                    consensusCard.style.background = 'linear-gradient(135deg, #059669, #10b981)';
+                } else if (data.consensus_strength === 'moderate') {
+                    consensusCard.style.background = 'linear-gradient(135deg, #d97706, #f59e0b)';
+                } else {
+                    consensusCard.style.background = 'linear-gradient(135deg, #dc2626, #ef4444)';
+                }
+
+                const opinionsGrid = document.getElementById('opinionsGrid');
+                opinionsGrid.innerHTML = data.opinions.map(opinion => {
+                    const agreed = opinion.diagnosis === data.consensus_diagnosis;
+                    return `
+                    <div class="opinion-card ${agreed ? 'agreed' : 'dissented'}">
+                        <div class="opinion-header">
+                            <span class="opinion-id">${opinion.opinion_id}</span>
+                            <span class="urgency-badge urgency-${opinion.urgency}">${opinion.urgency}</span>
+                        </div>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width: ${opinion.confidence * 100}%"></div>
+                        </div>
+                        <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">${opinion.confidence_percent} confidence</div>
+                        <div class="opinion-diagnosis">${opinion.diagnosis}</div>
+                        <div class="opinion-reasoning">${opinion.reasoning}</div>
+                        <div class="opinion-tests">
+                            <strong>Recommended tests:</strong><br>
+                            ${opinion.recommended_tests.map(t => `<span>${t}</span>`).join('')}
+                        </div>
+                    </div>
+                `;
+                }).join('');
+
+                document.getElementById('discussionContent').innerHTML = data.discussion_summary.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+            }
+        </script>
+</body>
+
+</html>

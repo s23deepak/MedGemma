@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedGemma Clinical Assistant</title>
+    <meta name="description" content="AI-powered clinical decision support with MedGemma and MedASR">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-left">
+                <a href="/" class="logo" style="text-decoration:none;">
+                    <span class="logo-icon">🏥</span>
+                    <span class="logo-text">MedGemma</span>
+                </a>
+                <div class="nav-links">
+                    <a href="/" class="active">Encounters</a>
+                    <a href="/history">Patient History</a>
+                    <a href="/compliance">Compliance</a>
+                    <a href="/council">Diagnostic Council</a>
+                    <a href="/patient-portal">Patient Portal</a>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="status-indicator" id="statusIndicator">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Ready</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Patient Selection (Initial State) -->
+            <section class="patient-selection" id="patientSelection">
+                <div class="selection-card">
+                    <h1>Select Patient</h1>
+                    <p class="subtitle">Choose a patient to begin the clinical encounter</p>
+                    <div class="patient-list" id="patientList">
+                        <!-- Patients will be loaded here -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Clinical Encounter (Active State) -->
+            <section class="clinical-encounter hidden" id="clinicalEncounter">
+                <!-- Left Panel - Patient Info & Image -->
+                <div class="panel panel-left">
+                    <!-- Patient Card -->
+                    <div class="card patient-card">
+                        <div class="card-header">
+                            <h2>Patient</h2>
+                            <button class="btn-icon" onclick="endEncounter()" title="End Encounter">✕</button>
+                        </div>
+                        <div class="patient-info" id="patientInfo">
+                            <!-- Patient info will be loaded here -->
+                        </div>
+                    </div>
+
+                    <!-- Image Upload -->
+                    <div class="card image-card">
+                        <div class="card-header">
+                            <h2>Medical Imaging</h2>
+                        </div>
+                        <div class="image-upload-area" id="imageUploadArea">
+                            <div class="upload-placeholder" id="uploadPlaceholder">
+                                <span class="upload-icon">🩻</span>
+                                <p>Drop image here or click to upload</p>
+                                <span class="upload-hint">X-ray, CT, MRI</span>
+                            </div>
+                            <img class="preview-image hidden" id="previewImage" alt="Medical image preview">
+                            <input type="file" id="imageInput" accept="image/*" hidden>
+                        </div>
+                        <div class="modality-select">
+                            <label>Modality:</label>
+                            <select id="modalitySelect">
+                                <option value="xray">X-ray</option>
+                                <option value="ct">CT Scan</option>
+                                <option value="mri">MRI</option>
+                                <option value="ultrasound">Ultrasound</option>
+                            </select>
+                        </div>
+                        <div class="image-analysis hidden" id="imageAnalysis">
+                            <div class="analysis-header">
+                                <span class="analysis-icon">🔍</span>
+                                <span>AI Analysis</span>
+                            </div>
+                            <div class="analysis-content" id="analysisContent"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Center Panel - Transcription -->
+                <div class="panel panel-center">
+                    <div class="card transcription-card">
+                        <div class="card-header">
+                            <h2>Clinical Dictation</h2>
+                            <div class="recording-controls">
+                                <button class="btn btn-record" id="recordBtn" onclick="toggleRecording()">
+                                    <span class="record-icon">🎤</span>
+                                    <span class="record-text">Start Recording</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="recording-indicator hidden" id="recordingIndicator">
+                            <div class="pulse-dot"></div>
+                            <span>Listening...</span>
+                        </div>
+                        <div class="transcription-area" id="transcriptionArea">
+                            <p class="placeholder-text">Click "Start Recording" to begin dictation...</p>
+                        </div>
+                        <div class="transcription-actions">
+                            <button class="btn btn-secondary" onclick="clearTranscription()">Clear</button>
+                            <button class="btn btn-primary" onclick="generateSOAP()" id="generateBtn">
+                                Generate SOAP Note
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Panel - SOAP Note -->
+                <div class="panel panel-right">
+                    <div class="card soap-card">
+                        <div class="card-header">
+                            <h2>SOAP Note</h2>
+                            <div class="soap-status" id="soapStatus">
+                                <span class="status-badge pending">Awaiting Generation</span>
+                            </div>
+                        </div>
+                        <div class="soap-content" id="soapContent">
+                            <div class="soap-placeholder">
+                                <span class="placeholder-icon">📋</span>
+                                <p>SOAP note will appear here after generation</p>
+                            </div>
+                        </div>
+                        <div class="soap-actions hidden" id="soapActions">
+                            <button class="btn btn-secondary" onclick="regenerateSOAP()">
+                                Regenerate
+                            </button>
+                            <button class="btn btn-success" onclick="approveSOAP()" id="approveBtn">
+                                ✓ Approve & Save to EHR
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Alerts -->
+                    <div class="card alerts-card hidden" id="alertsCard">
+                        <div class="card-header">
+                            <h2>⚠️ Clinical Alerts</h2>
+                        </div>
+                        <div class="alerts-content" id="alertsContent"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <span>MedGemma Clinical Assistant</span>
+            <span class="separator">•</span>
+            <span>Powered by Google Health AI Developer Foundations</span>
+        </footer>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Confirmation Modal -->
+    <div class="modal hidden" id="confirmModal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <h3>Confirm EHR Update</h3>
+            <p>Are you sure you want to save this SOAP note to the patient's electronic health record?</p>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-success" onclick="confirmApproval()">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>

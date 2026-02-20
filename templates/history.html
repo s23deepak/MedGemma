@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patient History - MedGemma</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        .history-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .search-section {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .search-row {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .search-input {
+            flex: 1;
+            min-width: 200px;
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: inherit;
+        }
+
+        .filter-select {
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: inherit;
+        }
+
+        .btn-search {
+            padding: 0.75rem 2rem;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-family: inherit;
+        }
+
+        .btn-search:hover {
+            background: var(--primary-dark);
+        }
+
+        .patient-info-banner {
+            background: linear-gradient(135deg, var(--primary), #7c3aed);
+            color: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .patient-name {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .patient-details {
+            display: flex;
+            gap: 2rem;
+            flex-wrap: wrap;
+            opacity: 0.9;
+        }
+
+        .timeline {
+            position: relative;
+            padding-left: 2rem;
+        }
+
+        .timeline::before {
+            content: '';
+            position: absolute;
+            left: 8px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: var(--primary);
+            opacity: 0.3;
+        }
+
+        .timeline-item {
+            position: relative;
+            margin-bottom: 1.5rem;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.25rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -1.5rem;
+            top: 1.5rem;
+            width: 12px;
+            height: 12px;
+            background: var(--primary);
+            border-radius: 50%;
+        }
+
+        .timeline-date {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        .timeline-title {
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+
+        .timeline-details {
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+        }
+
+        .category-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .category-condition {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        .category-medication {
+            background: #dbeafe;
+            color: #2563eb;
+        }
+
+        .category-observation {
+            background: #d1fae5;
+            color: #059669;
+        }
+
+        .category-imaging {
+            background: #fef3c7;
+            color: #d97706;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .tab {
+            padding: 0.75rem 1.5rem;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+
+        .tab.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        .tab:hover:not(.active) {
+            background: var(--bg-secondary);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="header-left">
+                <a href="/" class="logo" style="text-decoration:none;">
+                    <span class="logo-icon">🏥</span>
+                    <span class="logo-text">MedGemma</span>
+                </a>
+                <div class="nav-links">
+                    <a href="/">Encounters</a>
+                    <a href="/history" class="active">Patient History</a>
+                    <a href="/compliance">Compliance</a>
+                    <a href="/council">Diagnostic Council</a>
+                    <a href="/patient-portal">Patient Portal</a>
+                </div>
+            </div>
+            <div class="nav-user">
+                <span id="userRole">👤 Doctor</span>
+            </div>
+        </header>
+
+        <main class="history-container">
+            <h1>📋 Patient History Retrieval</h1>
+            <p style="color: var(--text-muted); margin-bottom: 2rem;">Search and view patient historical data via
+                FunctionGemma</p>
+
+            <section class="search-section">
+                <div class="search-row">
+                    <input type="text" class="search-input" id="patientSearch"
+                        placeholder="Search by patient name or ID...">
+                    <select class="filter-select" id="categoryFilter">
+                        <option value="all">All Categories</option>
+                        <option value="condition">Conditions</option>
+                        <option value="medication">Medications</option>
+                        <option value="observation">Observations</option>
+                        <option value="imaging">Imaging</option>
+                    </select>
+                    <select class="filter-select" id="timeFilter">
+                        <option value="365">Last Year</option>
+                        <option value="90">Last 90 Days</option>
+                        <option value="30">Last 30 Days</option>
+                        <option value="7">Last 7 Days</option>
+                    </select>
+                    <button class="btn-search" onclick="searchHistory()">🔍 Search</button>
+                </div>
+            </section>
+
+            <section id="patientInfo" class="patient-info" style="display: none;">
+                <div class="patient-name" id="patientName">John Doe</div>
+                <div class="patient-details">
+                    <span>🆔 <span id="patientId">P001</span></span>
+                    <span>🎂 <span id="patientAge">65</span> years old</span>
+                    <span>⚧ <span id="patientGender">Male</span></span>
+                </div>
+            </section>
+
+            <section class="tabs">
+                <div class="tab active" data-tab="timeline">Timeline</div>
+                <div class="tab" data-tab="medications">Medications</div>
+                <div class="tab" data-tab="imaging">Imaging Studies</div>
+                <div class="tab" data-tab="encounters">Encounters</div>
+            </section>
+
+            <section id="timelineContent" class="timeline">
+                <div class="empty-state">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <p>Search for a patient to view their history</p>
+                </div>
+            </section>
+        </main>
+
+        <script>
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => {
+                tab.addEventListener('click', () => {
+                    tabs.forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                    loadTabContent(tab.dataset.tab);
+                });
+            });
+
+            async function searchHistory() {
+                const query = document.getElementById('patientSearch').value;
+                const category = document.getElementById('categoryFilter').value;
+                const days = document.getElementById('timeFilter').value;
+
+                // For demo, use P002 if no specific search
+                const patientId = query.toUpperCase().startsWith('P') ? query.toUpperCase() : 'P002';
+
+                try {
+                    const response = await fetch(`/api/history/${patientId}/timeline?days=${days}`);
+                    const data = await response.json();
+
+                    if (data.patient) {
+                        document.getElementById('patientInfo').style.display = 'block';
+                        document.getElementById('patientName').textContent = data.patient.name;
+                        document.getElementById('patientId').textContent = data.patient.id;
+                        document.getElementById('patientAge').textContent = data.patient.age;
+                        document.getElementById('patientGender').textContent = data.patient.gender;
+                    }
+
+                    renderTimeline(data.timeline, category);
+                } catch (error) {
+                    console.error('Error fetching history:', error);
+                }
+            }
+
+            function renderTimeline(timeline, categoryFilter) {
+                const container = document.getElementById('timelineContent');
+
+                if (!timeline || timeline.length === 0) {
+                    container.innerHTML = '<div class="empty-state"><p>No history entries found</p></div>';
+                    return;
+                }
+
+                const filtered = categoryFilter === 'all'
+                    ? timeline
+                    : timeline.filter(item => item.category === categoryFilter);
+
+                container.innerHTML = filtered.map(item => `
+                <div class="timeline-item">
+                    <div class="timeline-date">
+                        ${item.date_display}
+                        <span class="category-badge category-${item.category}">${item.category}</span>
+                    </div>
+                    <div class="timeline-title">${item.title}</div>
+                    <div class="timeline-details">${item.details}</div>
+                </div>
+            `).join('');
+            }
+
+            function loadTabContent(tab) {
+                // Switch content based on tab
+                console.log('Loading tab:', tab);
+            }
+
+            // Load demo data on page load
+            document.addEventListener('DOMContentLoaded', () => {
+                document.getElementById('patientSearch').value = 'P002';
+                searchHistory();
+            });
+        </script>
+</body>
+
+</html>
