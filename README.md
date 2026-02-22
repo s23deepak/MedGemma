@@ -32,6 +32,15 @@ Open: http://localhost:8000
 - [ ] Add patient data approval workflow
 - [ ] Patient to hospital data transfer(lets say for ER patient has to explain his symptoms to AI and AI will generate SOAP note and send to doctor)
 - [] When a doctor says to look into other images AI will call MedGemma and generate a report
+- [] Can MedGemma provide bounding box for the tumor in the image.
+- [] Doctors or Residents should have an option to annotate the image and send it to MedGemma for further analysis.
+- [] Connect to online Medical Dictionaries for better understanding of medical terms.
+- [] Connect to online databases for scalability.
+- [] Provide metadata of location of hosiptal the paitent has visited, because of different weather conditions, pollution levels, etc. the diagnosis might vary.
+
+## To Ponder
+- [] How to help nurse with less medical knowledge to understand the medical reports, or real time diagnosis. 
+- [] Do patients talk with Insurance agents to get the best insurance plan for their medical needs or do the hospital do it?
 
 ## Architecture
 

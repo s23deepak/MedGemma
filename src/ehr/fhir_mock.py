@@ -28,6 +28,8 @@ class MockFHIRServer:
         self.medications: dict[str, list[dict]] = {}
         self.allergies: dict[str, list[dict]] = {}
         self.observations: dict[str, list[dict]] = {}
+        self.memories: dict[str, list[dict]] = {}
+        self.images: dict[str, list[dict]] = {}
         
         if data_path:
             self._load_data(Path(data_path))
@@ -222,6 +224,222 @@ class MockFHIRServer:
                 "effectiveDateTime": "2026-01-20T08:00:00Z"
             }
         ]
+        
+        # Demo Patient 3: John Doe — general patient
+        self.patients["P003"] = {
+            "resourceType": "Patient",
+            "id": "P003",
+            "name": [{"family": "Doe", "given": ["John"]}],
+            "gender": "male",
+            "birthDate": "1980-07-10",
+            "address": [{"city": "Los Angeles", "state": "CA"}]
+        }
+        
+        self.conditions["P003"] = [
+            {
+                "resourceType": "Condition",
+                "id": "C020",
+                "subject": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Anxiety disorder"}]},
+                "clinicalStatus": {"coding": [{"code": "active"}]},
+                "onsetDateTime": "2021-03-15"
+            },
+            {
+                "resourceType": "Condition",
+                "id": "C021",
+                "subject": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Migraine"}]},
+                "clinicalStatus": {"coding": [{"code": "active"}]},
+                "onsetDateTime": "2019-08-20"
+            }
+        ]
+        
+        self.medications["P003"] = [
+            {
+                "resourceType": "MedicationStatement",
+                "id": "M020",
+                "subject": {"reference": "Patient/P003"},
+                "medicationCodeableConcept": {"coding": [{"display": "Sertraline 50mg"}]},
+                "status": "active",
+                "dosage": [{"text": "Once daily in the morning"}]
+            },
+            {
+                "resourceType": "MedicationStatement",
+                "id": "M021",
+                "subject": {"reference": "Patient/P003"},
+                "medicationCodeableConcept": {"coding": [{"display": "Sumatriptan 50mg"}]},
+                "status": "active",
+                "dosage": [{"text": "As needed for migraines"}]
+            },
+            {
+                "resourceType": "MedicationStatement",
+                "id": "M022",
+                "subject": {"reference": "Patient/P003"},
+                "medicationCodeableConcept": {"coding": [{"display": "Ibuprofen 400mg"}]},
+                "status": "active",
+                "dosage": [{"text": "As needed for pain"}]
+            }
+        ]
+        
+        self.allergies["P003"] = [
+            {
+                "resourceType": "AllergyIntolerance",
+                "id": "A020",
+                "patient": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Latex"}]},
+                "reaction": [{"manifestation": [{"coding": [{"display": "Skin irritation"}]}]}]
+            },
+            {
+                "resourceType": "AllergyIntolerance",
+                "id": "A021",
+                "patient": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Codeine"}]},
+                "reaction": [{"manifestation": [{"coding": [{"display": "Nausea and vomiting"}]}]}]
+            }
+        ]
+        
+        self.observations["P003"] = [
+            {
+                "resourceType": "Observation",
+                "id": "O020",
+                "subject": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Blood Pressure"}]},
+                "valueQuantity": {"value": 122, "unit": "mmHg", "system": "systolic"},
+                "effectiveDateTime": "2026-02-10T09:00:00Z"
+            },
+            {
+                "resourceType": "Observation",
+                "id": "O021",
+                "subject": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Heart Rate"}]},
+                "valueQuantity": {"value": 72, "unit": "bpm"},
+                "effectiveDateTime": "2026-02-10T09:00:00Z"
+            },
+            {
+                "resourceType": "Observation",
+                "id": "O022",
+                "subject": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Weight"}]},
+                "valueQuantity": {"value": 85, "unit": "kg"},
+                "effectiveDateTime": "2026-02-10T09:00:00Z"
+            }
+        ]
+        
+        self.images["P003"] = [
+            {
+                "url": "/static/images/mock_chest_xray.jpg", 
+                "modality": "xray",
+                "timestamp": "2025-11-15T14:30:00Z",
+                "analysis": "PA and Lateral views of the chest demonstrate clear lungs without focal consolidation, pneumothorax, or pleural effusion. The cardiac silhouette is normal in size and contour. The mediastinum and hila are unremarkable. The visible osseous structures are intact. Conclusion: Normal chest radiograph."
+            }
+        ]
+        self.patients["P003"] = {
+            "resourceType": "Patient",
+            "id": "P003",
+            "name": [{"family": "Doe", "given": ["John"]}],
+            "gender": "male",
+            "birthDate": "1980-07-10",
+            "address": [{"city": "Los Angeles", "state": "CA"}]
+        }
+        
+        self.conditions["P003"] = [
+            {
+                "resourceType": "Condition",
+                "id": "C020",
+                "subject": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Anxiety disorder"}]},
+                "clinicalStatus": {"coding": [{"code": "active"}]},
+                "onsetDateTime": "2021-03-15"
+            },
+            {
+                "resourceType": "Condition",
+                "id": "C021",
+                "subject": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Migraine"}]},
+                "clinicalStatus": {"coding": [{"code": "active"}]},
+                "onsetDateTime": "2019-08-20"
+            }
+        ]
+        
+        self.medications["P003"] = [
+            {
+                "resourceType": "MedicationStatement",
+                "id": "M020",
+                "subject": {"reference": "Patient/P003"},
+                "medicationCodeableConcept": {"coding": [{"display": "Sertraline 50mg"}]},
+                "status": "active",
+                "dosage": [{"text": "Once daily in the morning"}]
+            },
+            {
+                "resourceType": "MedicationStatement",
+                "id": "M021",
+                "subject": {"reference": "Patient/P003"},
+                "medicationCodeableConcept": {"coding": [{"display": "Sumatriptan 50mg"}]},
+                "status": "active",
+                "dosage": [{"text": "As needed for migraines"}]
+            },
+            {
+                "resourceType": "MedicationStatement",
+                "id": "M022",
+                "subject": {"reference": "Patient/P003"},
+                "medicationCodeableConcept": {"coding": [{"display": "Ibuprofen 400mg"}]},
+                "status": "active",
+                "dosage": [{"text": "As needed for pain"}]
+            }
+        ]
+        
+        self.allergies["P003"] = [
+            {
+                "resourceType": "AllergyIntolerance",
+                "id": "A020",
+                "patient": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Latex"}]},
+                "reaction": [{"manifestation": [{"coding": [{"display": "Skin irritation"}]}]}]
+            },
+            {
+                "resourceType": "AllergyIntolerance",
+                "id": "A021",
+                "patient": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Codeine"}]},
+                "reaction": [{"manifestation": [{"coding": [{"display": "Nausea and vomiting"}]}]}]
+            }
+        ]
+        
+        self.observations["P003"] = [
+            {
+                "resourceType": "Observation",
+                "id": "O020",
+                "subject": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Blood Pressure"}]},
+                "valueQuantity": {"value": 122, "unit": "mmHg", "system": "systolic"},
+                "effectiveDateTime": "2026-02-10T09:00:00Z"
+            },
+            {
+                "resourceType": "Observation",
+                "id": "O021",
+                "subject": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Heart Rate"}]},
+                "valueQuantity": {"value": 72, "unit": "bpm"},
+                "effectiveDateTime": "2026-02-10T09:00:00Z"
+            },
+            {
+                "resourceType": "Observation",
+                "id": "O022",
+                "subject": {"reference": "Patient/P003"},
+                "code": {"coding": [{"display": "Weight"}]},
+                "valueQuantity": {"value": 85, "unit": "kg"},
+                "effectiveDateTime": "2026-02-10T09:00:00Z"
+            }
+        ]
+        
+        self.images["P003"] = [
+            {
+                "url": "/static/images/mock_chest_xray.jpg", 
+                "modality": "xray",
+                "timestamp": "2025-11-15T14:30:00Z",
+                "analysis": "PA and Lateral views of the chest demonstrate clear lungs without focal consolidation, pneumothorax, or pleural effusion. The cardiac silhouette is normal in size and contour. The mediastinum and hila are unremarkable. The visible osseous structures are intact. Conclusion: Normal chest radiograph."
+            }
+        ]
     
     def _load_data(self, data_path: Path):
         """Load patient data from JSON file."""
@@ -293,7 +511,8 @@ class MockFHIRServer:
                     "date": o.get("effectiveDateTime", "Unknown")
                 }
                 for o in self.observations.get(patient_id, [])
-            ]
+            ],
+            "images": self.images.get(patient_id, [])
         }
     
     def update_patient_record(
@@ -362,6 +581,27 @@ class MockFHIRServer:
             }
             for pid, p in self.patients.items()
         ]
+        
+    def add_memory(self, patient_id: str, memory_text: str) -> bool:
+        """Store a patient memory note."""
+        if patient_id not in self.patients:
+            return False
+            
+        if patient_id not in self.memories:
+            self.memories[patient_id] = []
+            
+        self.memories[patient_id].append({
+            "text": memory_text,
+            "timestamp": datetime.now().isoformat()
+        })
+        return True
+        
+    def get_memories(self, patient_id: str) -> list[str]:
+        """Get all stored memories for a patient."""
+        memories = self.memories.get(patient_id, [])
+        # Sort by timestamp descending
+        memories.sort(key=lambda m: m.get("timestamp", ""), reverse=True)
+        return [m.get("text", "") for m in memories if m.get("text")]
 
 
 # Singleton instance

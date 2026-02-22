@@ -45,22 +45,41 @@ class MedASRStreaming:
         self._load_model()
     
     def _load_model(self):
-        """Load MedASR model."""
+        """Load MedASR model with explicit device placement (no device_map='auto')
+        so that sleep()/wake_up() can freely move weights between CPU and GPU."""
         logger.info(f"Loading MedASR model: {self.MODEL_ID}")
-        
+
         self.processor = AutoProcessor.from_pretrained(
             self.MODEL_ID,
             trust_remote_code=True
         )
-        
+
         self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
             self.MODEL_ID,
             torch_dtype=torch.float16,
-            device_map="auto",
             trust_remote_code=True
-        )
-        
+        ).to(self.device)
+
         logger.info("MedASR model loaded successfully")
+
+    def sleep(self):
+        """Offload model weights to CPU to free GPU memory (mirrors vLLM sleep)."""
+        if self.model is None:
+            return
+        current_device = next(self.model.parameters()).device
+        if current_device.type != "cpu":
+            logger.info("MedASR sleeping (moving weights to CPU)")
+            self.model = self.model.to("cpu")
+            torch.cuda.empty_cache()
+
+    def wake_up(self):
+        """Move model weights back to GPU (mirrors vLLM wake_up)."""
+        if self.model is None:
+            return
+        current_device = next(self.model.parameters()).device
+        if current_device.type == "cpu":
+            logger.info(f"MedASR waking up (moving weights to {self.device})")
+            self.model = self.model.to(self.device)
     
     def start_listening(self, callback: Callable[[str], None]):
         """
@@ -169,11 +188,12 @@ class MedASRStreaming:
             Transcribed text
         """
         try:
+            model_device = next(self.model.parameters()).device
             inputs = self.processor(
                 audio_data,
                 sampling_rate=self.SAMPLE_RATE,
                 return_tensors="pt"
-            ).to(self.device)
+            ).to(model_device)
             
             with torch.inference_mode():
                 outputs = self.model.generate(

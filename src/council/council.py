@@ -98,33 +98,102 @@ class DiagnosticCouncil:
         temperature: float = 0.7
     ) -> DiagnosticOpinion:
         """
-        Generate a single diagnostic opinion.
-        In production, this would call MedGemma with different temperatures.
+        Generate a single diagnostic opinion using the AI agent.
         """
-        # For demonstration, generate varied mock opinions
-        # In production: self.agent.chat(prompt, temperature=temperature)
-        
         symptoms = case_info.get("symptoms", [])
         history = case_info.get("patient_history", "")
+        imaging = case_info.get("imaging_findings", "")
+        vitals = case_info.get("vitals", {})
         
-        # Mock varied diagnoses based on symptoms
-        possible_diagnoses = self._get_possible_diagnoses(symptoms)
+        if self.agent is None:
+            # Fallback to mock logic
+            possible_diagnoses = self._get_possible_diagnoses(symptoms)
+            idx = int(opinion_id.split("-")[1]) % len(possible_diagnoses)
+            primary_diagnosis = possible_diagnoses[idx % len(possible_diagnoses)]
+            confidence_base = 0.75 + (random.random() * 0.2)
+            
+            return DiagnosticOpinion(
+                opinion_id=opinion_id,
+                diagnosis=primary_diagnosis["name"],
+                confidence=round(confidence_base + primary_diagnosis.get("confidence_boost", 0), 2),
+                reasoning=primary_diagnosis["reasoning"],
+                differential_diagnoses=[d["name"] for d in possible_diagnoses if d["name"] != primary_diagnosis["name"]][:3],
+                recommended_tests=primary_diagnosis.get("tests", ["CBC", "BMP"]),
+                urgency=primary_diagnosis.get("urgency", "routine")
+            )
+            
+        # Call the AI model and ask for JSON
+        import json
+        import re
         
-        # Add some variation
-        idx = int(opinion_id.split("-")[1]) % len(possible_diagnoses)
-        primary_diagnosis = possible_diagnoses[idx % len(possible_diagnoses)]
-        
-        confidence_base = 0.75 + (random.random() * 0.2)
-        
-        return DiagnosticOpinion(
-            opinion_id=opinion_id,
-            diagnosis=primary_diagnosis["name"],
-            confidence=round(confidence_base + primary_diagnosis.get("confidence_boost", 0), 2),
-            reasoning=primary_diagnosis["reasoning"],
-            differential_diagnoses=[d["name"] for d in possible_diagnoses if d["name"] != primary_diagnosis["name"]][:3],
-            recommended_tests=primary_diagnosis.get("tests", ["CBC", "BMP"]),
-            urgency=primary_diagnosis.get("urgency", "routine")
-        )
+        prompt = f"""You are a medical diagnostic AI participating in a diagnostic council.
+Analyze the following patient case and provide your assessment:
+Symptoms: {', '.join(symptoms)}
+History: {history}
+Imaging: {imaging}
+Vitals: {vitals}
+
+Provide exactly 1 primary diagnosis and up to 3 differential diagnoses.
+Return EXACTLY ONE valid JSON object matching this exact schema and NOTHING ELSE:
+{{
+  "name": "Diagnosis Name",
+  "reasoning": "Brief clinical reasoning (1-2 sentences)",
+  "confidence": 0.85,
+  "differential_diagnoses": ["Alt1", "Alt2", "Alt3"],
+  "recommended_tests": ["Test1", "Test2"],
+  "urgency": "routine"
+}}
+
+Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
+
+        try:
+            response_text = ""
+            if hasattr(self.agent, 'process_query'):
+                # Send context inside prompt, bypass patient_context
+                result = self.agent.process_query(query=prompt, patient_context=None)
+                response_text = result.get("response", "")
+            elif hasattr(self.agent, 'chat'):
+                response_text = self.agent.chat(prompt)
+                
+            # Parse JSON - try to extract JSON block if wrapped in markdown
+            json_match = re.search(r'```(?:json)?(.*?)```', response_text, re.DOTALL)
+            if json_match:
+                response_text = json_match.group(1)
+                
+            # Also clean up simulated prefix
+            response_text = response_text.replace("[Simulated] Processed query: ", "").strip()
+            if response_text.endswith("."):
+                response_text = response_text[:-1] # Remove trailing period from simulated response
+                
+            result = json.loads(response_text)
+            
+            return DiagnosticOpinion(
+                opinion_id=opinion_id,
+                diagnosis=result.get("name", "Unknown Diagnosis"),
+                confidence=float(result.get("confidence", 0.5)),
+                reasoning=result.get("reasoning", "No reasoning provided."),
+                differential_diagnoses=result.get("differential_diagnoses", []),
+                recommended_tests=result.get("recommended_tests", []),
+                urgency=result.get("urgency", "routine")
+            )
+            
+        except Exception as e:
+            # Fallback to mock data on JSON parse failure or agent error
+            print(f"Error calling agent: {e}. Falling back to mock data.")
+            possible_diagnoses = self._get_possible_diagnoses(symptoms)
+            idx = int(opinion_id.split("-")[1]) % len(possible_diagnoses)
+            primary_diagnosis = possible_diagnoses[idx % len(possible_diagnoses)]
+            confidence_base = 0.75 + (random.random() * 0.2)
+            
+            return DiagnosticOpinion(
+                opinion_id=opinion_id,
+                diagnosis=primary_diagnosis["name"],
+                confidence=round(confidence_base + primary_diagnosis.get("confidence_boost", 0), 2),
+                reasoning=primary_diagnosis["reasoning"] + f" (Generated via mock fallback)",
+                differential_diagnoses=[d["name"] for d in possible_diagnoses if d["name"] != primary_diagnosis["name"]][:3],
+                recommended_tests=primary_diagnosis.get("tests", ["CBC", "BMP"]),
+                urgency=primary_diagnosis.get("urgency", "routine")
+            )
     
     def _get_possible_diagnoses(self, symptoms: list[str]) -> list[dict]:
         """Get possible diagnoses based on symptoms."""
@@ -364,9 +433,11 @@ class DiagnosticCouncil:
 # Singleton instance
 _council = None
 
-def get_diagnostic_council(num_rollouts: int = 5) -> DiagnosticCouncil:
+def get_diagnostic_council(agent=None, num_rollouts: int = 5) -> DiagnosticCouncil:
     """Get or create the diagnostic council singleton."""
     global _council
     if _council is None:
-        _council = DiagnosticCouncil(num_rollouts=num_rollouts)
+        _council = DiagnosticCouncil(agent=agent, num_rollouts=num_rollouts)
+    elif agent is not None and _council.agent is None:
+        _council.agent = agent
     return _council

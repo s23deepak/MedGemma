@@ -253,16 +253,23 @@
                     <a href="/compliance">Compliance</a>
                     <a href="/council">Diagnostic Council</a>
                     <a href="/patient-portal" class="active">Patient Portal</a>
+                    <a href="/ai-portal">AI Chat Portal</a>
                 </div>
             </div>
             <div class="nav-user">
-                <span>👤 John Doe</span>
+                <label for="patientSelect" style="margin-right: 0.5rem;">👤</label>
+                <select id="patientSelect" onchange="switchPatient(this.value)"
+                    style="background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 0.75rem; font-family: inherit; font-size: 0.9rem; cursor: pointer;">
+                    <option value="P001">Sarah M Wilson</option>
+                    <option value="P002">Carlos Martinez</option>
+                    <option value="P003" selected>John Doe</option>
+                </select>
             </div>
         </header>
 
         <main class="portal-container">
             <section class="welcome-banner">
-                <div class="welcome-title">Welcome back, John!</div>
+                <div class="welcome-title" id="welcomeTitle">Welcome back, John!</div>
                 <div class="welcome-subtitle">Here's a summary of your recent care</div>
             </section>
 
@@ -329,7 +336,43 @@
         </main>
 
         <script>
-            const patientId = 'P001';
+            let patientId = 'P003';
+
+            // Load patients from API and populate selector
+            async function loadPatients() {
+                try {
+                    const response = await fetch('/api/patients');
+                    const data = await response.json();
+                    const select = document.getElementById('patientSelect');
+                    select.innerHTML = '';
+                    data.patients.forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p.id;
+                        opt.textContent = p.name;
+                        if (p.id === patientId) opt.selected = true;
+                        select.appendChild(opt);
+                    });
+                } catch (e) {
+                    console.error('Error loading patients:', e);
+                }
+            }
+
+            function switchPatient(newId) {
+                patientId = newId;
+                const select = document.getElementById('patientSelect');
+                const name = select.options[select.selectedIndex].text;
+                const firstName = name.split(' ')[0];
+                document.getElementById('welcomeTitle').textContent = `Welcome back, ${firstName}!`;
+                // Clear chat
+                document.getElementById('chatMessages').innerHTML = `
+                    <div class="message assistant">
+                        <div class="message-bubble">
+                            Hello ${firstName}! I'm here to help answer questions about your care. What would you like to know?
+                        </div>
+                    </div>
+                `;
+                loadAppointmentSummary();
+            }
 
             async function loadAppointmentSummary() {
                 try {
@@ -399,7 +442,10 @@
                 container.scrollTop = container.scrollHeight;
             }
 
-            document.addEventListener('DOMContentLoaded', loadAppointmentSummary);
+            document.addEventListener('DOMContentLoaded', () => {
+                loadPatients();
+                loadAppointmentSummary();
+            });
         </script>
 </body>
 

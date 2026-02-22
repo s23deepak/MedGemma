@@ -13,7 +13,8 @@ const state = {
     audioContext: null,
     mediaRecorder: null,
     audioSocket: null,
-    soapGenerated: false
+    soapGenerated: false,
+    modelStatusInterval: null   // polling timer for model sleep/wake status
 };
 
 // DOM Elements
@@ -39,7 +40,11 @@ const elements = {
     alertsContent: document.getElementById('alertsContent'),
     statusIndicator: document.getElementById('statusIndicator'),
     toastContainer: document.getElementById('toastContainer'),
-    confirmModal: document.getElementById('confirmModal')
+    confirmModal: document.getElementById('confirmModal'),
+    dbImageSelect: document.getElementById('dbImageSelect'),
+    // Model status bar
+    modelStatusBar: document.getElementById('modelStatusBar'),
+    modelStatusHint: document.getElementById('modelStatusHint'),
 };
 
 // Initialize application
@@ -110,11 +115,15 @@ async function selectPatient(patientId) {
         state.patient = data.patient;
 
         // Update UI
-        renderPatientInfo(data.patient);
+        renderPatientInfo(data);
 
         // Switch to encounter view
         elements.patientSelection.classList.add('hidden');
         elements.clinicalEncounter.classList.remove('hidden');
+
+        // Show model status bar and start polling
+        elements.modelStatusBar.classList.remove('hidden');
+        startModelStatusPolling();
 
         updateStatus('Encounter Active');
         showToast('Encounter started');
@@ -125,50 +134,65 @@ async function selectPatient(patientId) {
     }
 }
 
-function renderPatientInfo(patient) {
-    const p = patient.patient;
+function renderPatientInfo(data) {
+    const p = data.patient;
     elements.patientInfo.innerHTML = `
         <div class="patient-name">${p.name}</div>
         <div class="patient-demographics">${p.age} years • ${p.gender} • ${p.location}</div>
         
-        ${patient.conditions.length > 0 ? `
+        ${data.conditions && data.conditions.length > 0 ? `
             <div class="patient-section">
                 <div class="patient-section-title">Conditions</div>
                 <div class="patient-section-content">
-                    ${patient.conditions.map(c => `<span class="tag">${c.name}</span>`).join('')}
+                    ${data.conditions.map(c => `<span class="tag">${c.name}</span>`).join('')}
                 </div>
             </div>
         ` : ''}
         
-        ${patient.medications.length > 0 ? `
+        ${data.medications && data.medications.length > 0 ? `
             <div class="patient-section">
                 <div class="patient-section-title">Medications</div>
                 <div class="patient-section-content">
-                    ${patient.medications.map(m => `<span class="tag">${m.name}</span>`).join('')}
+                    ${data.medications.map(m => `<span class="tag">${m.name}</span>`).join('')}
                 </div>
             </div>
         ` : ''}
         
-        ${patient.allergies.length > 0 ? `
+        ${data.allergies && data.allergies.length > 0 ? `
             <div class="patient-section">
                 <div class="patient-section-title">Allergies</div>
                 <div class="patient-section-content">
-                    ${patient.allergies.map(a => `<span class="tag allergy">${a.substance}</span>`).join('')}
+                    ${data.allergies.map(a => `<span class="tag allergy">${a.substance}</span>`).join('')}
                 </div>
             </div>
         ` : ''}
         
-        ${patient.recent_observations.length > 0 ? `
+        ${data.recent_observations && data.recent_observations.length > 0 ? `
             <div class="patient-section">
                 <div class="patient-section-title">Recent Observations</div>
                 <div class="patient-section-content">
-                    ${patient.recent_observations.slice(0, 4).map(o =>
+                    ${data.recent_observations.slice(0, 4).map(o =>
         `<div style="font-size: 0.8rem; margin-bottom: 4px;">${o.type}: <strong>${o.value}</strong></div>`
     ).join('')}
                 </div>
             </div>
         ` : ''}
     `;
+
+    // Populate image dropdown if images exist
+    elements.dbImageSelect.innerHTML = '<option value="">-- Select an image --</option>';
+    if (data.images && data.images.length > 0) {
+        data.images.forEach(img => {
+            const opt = document.createElement('option');
+            opt.value = img.url;
+            opt.textContent = `${img.modality.toUpperCase()} - ${new Date(img.timestamp).toLocaleDateString()}`;
+            opt.dataset.analysis = img.analysis || '';
+            opt.dataset.modality = img.modality || 'xray';
+            elements.dbImageSelect.appendChild(opt);
+        });
+    } else {
+        elements.dbImageSelect.innerHTML = '<option value="">-- No existing images --</option>';
+    }
 }
 
 function endEncounter() {
@@ -184,10 +208,14 @@ function endEncounter() {
         toggleRecording();
     }
 
+    // Stop model status polling and hide bar
+    stopModelStatusPolling();
+    elements.modelStatusBar.classList.add('hidden');
+
     // Reset UI
     elements.clinicalEncounter.classList.add('hidden');
     elements.patientSelection.classList.remove('hidden');
-    elements.transcriptionArea.innerHTML = '<p class="placeholder-text">Click "Start Recording" to begin dictation...</p>';
+    elements.transcriptionArea.value = '';
     elements.soapContent.innerHTML = `
         <div class="soap-placeholder">
             <span class="placeholder-icon">📋</span>
@@ -281,6 +309,32 @@ async function handleImageFile(file) {
     } catch (error) {
         showToast('Failed to upload image', 'error');
         console.error('Error uploading image:', error);
+    }
+}
+
+async function loadDatabaseImage(imageUrl) {
+    if (!imageUrl) {
+        elements.previewImage.classList.add('hidden');
+        elements.uploadPlaceholder.classList.remove('hidden');
+        elements.imageAnalysis.classList.add('hidden');
+        return;
+    }
+
+    const selectedOption = elements.dbImageSelect.options[elements.dbImageSelect.selectedIndex];
+
+    // Show preview
+    elements.previewImage.src = imageUrl;
+    elements.previewImage.classList.remove('hidden');
+    elements.uploadPlaceholder.classList.add('hidden');
+    elements.modalitySelect.value = selectedOption.dataset.modality || "xray";
+
+    // Show existing analysis if available
+    const analysis = selectedOption.dataset.analysis;
+    if (analysis) {
+        elements.imageAnalysis.classList.remove('hidden');
+        elements.analysisContent.textContent = analysis;
+    } else {
+        elements.imageAnalysis.classList.add('hidden');
     }
 }
 
@@ -398,13 +452,17 @@ function stopRecording() {
 
 function updateTranscriptionDisplay() {
     if (state.transcription) {
-        elements.transcriptionArea.innerHTML = `<p>${state.transcription}</p>`;
+        elements.transcriptionArea.value = state.transcription;
     }
+}
+
+function updateTranscriptionState(value) {
+    state.transcription = value;
 }
 
 function clearTranscription() {
     state.transcription = '';
-    elements.transcriptionArea.innerHTML = '<p class="placeholder-text">Click "Start Recording" to begin dictation...</p>';
+    elements.transcriptionArea.value = '';
 }
 
 // ===== SOAP Note Generation =====
@@ -512,4 +570,94 @@ function showToast(message, type = 'info') {
     setTimeout(() => {
         toast.remove();
     }, 3000);
+}
+
+// ===== Model Status Polling =====
+
+function startModelStatusPolling() {
+    pollModelStatus(); // immediate first call
+    state.modelStatusInterval = setInterval(pollModelStatus, 3000);
+}
+
+function stopModelStatusPolling() {
+    if (state.modelStatusInterval) {
+        clearInterval(state.modelStatusInterval);
+        state.modelStatusInterval = null;
+    }
+}
+
+async function pollModelStatus() {
+    try {
+        const response = await fetch('/api/model-status');
+        if (!response.ok) return;
+        const data = await response.json();
+        updateModelStatusDisplay(data);
+    } catch (_) {
+        // Silently ignore — server may be busy
+    }
+}
+
+function updateModelStatusDisplay(data) {
+    const models = data.models || {};
+    const active = data.active;
+
+    // Update each chip
+    ['medgemma', 'functiongemma', 'medasr'].forEach(name => {
+        const chip = document.getElementById(`chip-${name}`);
+        if (!chip) return;
+        const status = (models[name] || {}).status || 'unloaded';
+        chip.className = `model-chip ${status === 'awake' ? 'awake' : 'asleep'}`;
+    });
+
+    // Update hint text
+    if (active) {
+        const labels = { medgemma: 'MedGemma', functiongemma: 'FunctionGemma', medasr: 'MedASR' };
+        elements.modelStatusHint.textContent = `${labels[active] || active} active`;
+    } else {
+        elements.modelStatusHint.textContent = 'All sleeping';
+    }
+}
+
+// ===== Audio File Upload =====
+
+async function handleAudioFileUpload(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    if (!state.sessionId) {
+        showToast('No active encounter', 'error');
+        input.value = '';
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('audio', file);
+
+    showToast('Transcribing audio file…');
+
+    try {
+        const response = await fetch(
+            `/api/encounters/${state.sessionId}/transcribe-audio`,
+            { method: 'POST', body: formData }
+        );
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({ detail: response.statusText }));
+            showToast(`Transcription failed: ${err.detail}`, 'error');
+            input.value = '';
+            return;
+        }
+
+        const data = await response.json();
+        if (data.status === 'transcribed') {
+            state.transcription = data.full_transcription;
+            elements.transcriptionArea.value = data.full_transcription;
+            showToast('Audio transcribed', 'success');
+        }
+    } catch (error) {
+        showToast('Audio transcription error', 'error');
+        console.error('Audio file upload error:', error);
+    } finally {
+        input.value = '';  // Reset so same file can be re-uploaded
+    }
 }

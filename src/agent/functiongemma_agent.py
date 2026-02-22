@@ -16,7 +16,7 @@ try:
     VLLM_AVAILABLE = True
 except ImportError:
     VLLM_AVAILABLE = False
-    logger.warning("vLLM not installed. FunctionGemma requires vLLM.")
+    logger.warning("vLLM not installed. FunctionGemma will use Transformers fallback.")
 
 
 class FunctionGemmaAgent:
@@ -43,25 +43,33 @@ class FunctionGemmaAgent:
             gpu_memory_utilization: Fraction of GPU memory (0.3 is enough for 270M)
             max_model_len: Maximum sequence length
         """
-        if not VLLM_AVAILABLE:
-            raise ImportError("vLLM is required for FunctionGemma. Run: pip install vllm")
-        
-        self.model = None
-        self.tools: dict[str, dict] = {}
-        self.tool_handlers: dict[str, Callable] = {}
-        
-        self._load_model(gpu_memory_utilization, max_model_len)
-    
     def _load_model(self, gpu_memory_utilization: float, max_model_len: int):
-        """Load FunctionGemma model with vLLM."""
+        """Load FunctionGemma model."""
         logger.info(f"Loading FunctionGemma: {self.MODEL_ID}")
         
-        self.model = LLM(
-            model=self.MODEL_ID,
-            gpu_memory_utilization=gpu_memory_utilization,
-            max_model_len=max_model_len,
-            trust_remote_code=True
-        )
+        self.use_vllm = VLLM_AVAILABLE
+        
+        if self.use_vllm:
+            logger.info("Using vLLM backend for FunctionGemma")
+            self.model = LLM(
+                model=self.MODEL_ID,
+                gpu_memory_utilization=gpu_memory_utilization,
+                max_model_len=max_model_len,
+                trust_remote_code=True
+            )
+        else:
+            logger.info("Using Transformers backend for FunctionGemma")
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            import torch
+            
+            self.tokenizer = AutoTokenizer.from_pretrained(self.MODEL_ID)
+            # 270M model is small enough we might not strictly need 4-bit, but it helps
+            self.hf_model = AutoModelForCausalLM.from_pretrained(
+                self.MODEL_ID,
+                device_map="auto",
+                torch_dtype=torch.float16,
+                trust_remote_code=True
+            )
         
         logger.info("FunctionGemma loaded successfully")
     
@@ -201,15 +209,35 @@ User request: {query}
 
 Respond with a JSON function call:"""
 
-        sampling_params = SamplingParams(
-            temperature=0.1,  # Low temp for deterministic routing
-            top_p=0.95,
-            max_tokens=256,
-            stop=["User:", "\n\n"]
-        )
-        
-        outputs = self.model.generate([prompt], sampling_params=sampling_params)
-        response = outputs[0].outputs[0].text.strip()
+        if self.use_vllm:
+            sampling_params = SamplingParams(
+                temperature=0.1,  # Low temp for deterministic routing
+                top_p=0.95,
+                max_tokens=256,
+                stop=["User:", "\n\n"]
+            )
+            
+            outputs = self.model.generate([prompt], sampling_params=sampling_params)
+            response = outputs[0].outputs[0].text.strip()
+        else:
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.hf_model.device)
+            outputs = self.hf_model.generate(
+                **inputs,
+                max_new_tokens=256,
+                temperature=0.1,
+                top_p=0.95,
+                do_sample=True,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+            response = self.tokenizer.decode(
+                outputs[0][inputs.input_ids.shape[1]:], 
+                skip_special_tokens=True
+            ).strip()
+            
+            # Manual stop sequence handling
+            for stop_seq in ["User:", "\n\n"]:
+                if stop_seq in response:
+                    response = response[:response.index(stop_seq)].strip()
         
         # Parse the function call
         function_call = self._parse_function_call(response)
@@ -284,15 +312,35 @@ Generate a JSON array of function calls to achieve this goal (max {max_steps} st
 
 Action plan:"""
 
-        sampling_params = SamplingParams(
-            temperature=0.2,
-            top_p=0.95,
-            max_tokens=512,
-            stop=["Goal:", "Context:"]
-        )
-        
-        outputs = self.model.generate([prompt], sampling_params=sampling_params)
-        response = outputs[0].outputs[0].text.strip()
+        if self.use_vllm:
+            sampling_params = SamplingParams(
+                temperature=0.2,
+                top_p=0.95,
+                max_tokens=512,
+                stop=["Goal:", "Context:"]
+            )
+            
+            outputs = self.model.generate([prompt], sampling_params=sampling_params)
+            response = outputs[0].outputs[0].text.strip()
+        else:
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.hf_model.device)
+            outputs = self.hf_model.generate(
+                **inputs,
+                max_new_tokens=512,
+                temperature=0.2,
+                top_p=0.95,
+                do_sample=True,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+            response = self.tokenizer.decode(
+                outputs[0][inputs.input_ids.shape[1]:], 
+                skip_special_tokens=True
+            ).strip()
+            
+            # Manual stop sequence handling
+            for stop_seq in ["Goal:", "Context:"]:
+                if stop_seq in response:
+                    response = response[:response.index(stop_seq)].strip()
         
         # Parse action plan
         try:
@@ -311,4 +359,4 @@ Action plan:"""
 
 def is_functiongemma_available() -> bool:
     """Check if FunctionGemma can be loaded."""
-    return VLLM_AVAILABLE
+    return True

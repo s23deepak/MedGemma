@@ -27,6 +27,7 @@
                     <a href="/compliance">Compliance</a>
                     <a href="/council">Diagnostic Council</a>
                     <a href="/patient-portal">Patient Portal</a>
+                    <a href="/ai-portal">AI Chat Portal</a>
                 </div>
             </div>
             <div class="header-right">
@@ -36,6 +37,23 @@
                 </div>
             </div>
         </header>
+
+        <!-- Model Status Bar (visible during encounter) -->
+        <div class="model-status-bar hidden" id="modelStatusBar">
+            <span class="model-status-label">Models:</span>
+            <div class="model-chips" id="modelChips">
+                <span class="model-chip asleep" id="chip-medgemma">
+                    <span class="chip-dot"></span>MedGemma
+                </span>
+                <span class="model-chip asleep" id="chip-functiongemma">
+                    <span class="chip-dot"></span>FunctionGemma
+                </span>
+                <span class="model-chip asleep" id="chip-medasr">
+                    <span class="chip-dot"></span>MedASR
+                </span>
+            </div>
+            <span class="model-status-hint" id="modelStatusHint">All sleeping</span>
+        </div>
 
         <!-- Main Content -->
         <main class="main-content">
@@ -79,6 +97,16 @@
                             <img class="preview-image hidden" id="previewImage" alt="Medical image preview">
                             <input type="file" id="imageInput" accept="image/*" hidden>
                         </div>
+                        <div class="db-image-select"
+                            style="margin-top: 1rem; margin-bottom: 0.5rem; text-align: center;">
+                            <span
+                                style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem; display: block;">OR
+                                Select existing image</span>
+                            <select id="dbImageSelect" onchange="loadDatabaseImage(this.value)"
+                                style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-primary); font-family: inherit;">
+                                <option value="">-- No images found --</option>
+                            </select>
+                        </div>
                         <div class="modality-select">
                             <label>Modality:</label>
                             <select id="modalitySelect">
@@ -108,15 +136,20 @@
                                     <span class="record-icon">🎤</span>
                                     <span class="record-text">Start Recording</span>
                                 </button>
+                                <label class="btn btn-secondary" style="cursor:pointer;" title="Upload audio file to transcribe">
+                                    <span>📂 Upload Audio</span>
+                                    <input type="file" id="audioFileInput" accept="audio/*,.wav,.mp3,.webm,.ogg,.m4a" hidden onchange="handleAudioFileUpload(this)">
+                                </label>
                             </div>
                         </div>
                         <div class="recording-indicator hidden" id="recordingIndicator">
                             <div class="pulse-dot"></div>
                             <span>Listening...</span>
                         </div>
-                        <div class="transcription-area" id="transcriptionArea">
-                            <p class="placeholder-text">Click "Start Recording" to begin dictation...</p>
-                        </div>
+                        <textarea class="transcription-area" id="transcriptionArea"
+                            placeholder="Click 'Start Recording' to dictate, or type your clinical notes directly here..."
+                            style="width: 100%; min-height: 250px; border: 1px solid var(--border); border-radius: 8px; padding: 1rem; background: var(--bg-primary); color: var(--text-primary); font-family: inherit; font-size: 1rem; resize: vertical; line-height: 1.5;"
+                            oninput="updateTranscriptionState(this.value)"></textarea>
                         <div class="transcription-actions">
                             <button class="btn btn-secondary" onclick="clearTranscription()">Clear</button>
                             <button class="btn btn-primary" onclick="generateSOAP()" id="generateBtn">

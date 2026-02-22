@@ -185,18 +185,21 @@ Be thorough but concise. Flag any urgent findings prominently with ⚠️."""
         
         # Prepare inputs
         messages = [
-            {"role": "system", "content": self._build_system_prompt()},
             {"role": "user", "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": prompt}
+                {"type": "image"},
+                {"type": "text", "text": self._build_system_prompt() + "\n\n" + prompt}
             ]}
         ]
         
-        inputs = self.processor.apply_chat_template(
+        text = self.processor.apply_chat_template(
             messages,
             add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
+            tokenize=False
+        )
+        
+        inputs = self.processor(
+            text=text,
+            images=image,
             return_tensors="pt"
         ).to(self.model.device)
         
@@ -391,12 +394,12 @@ Additionally, identify:
         Returns:
             Model response
         """
-        messages = [{"role": "system", "content": self._build_system_prompt()}]
+        messages = [{"role": "system", "content": [{"type": "text", "text": self._build_system_prompt()}]}]
         
         if history:
             messages.extend(history)
         
-        messages.append({"role": "user", "content": message})
+        messages.append({"role": "user", "content": [{"type": "text", "text": message}]})
         
         inputs = self.processor.apply_chat_template(
             messages,

@@ -21,10 +21,11 @@ dependencies = [
     "python-multipart>=0.0.22",
     "scipy>=1.17.0",
     "sounddevice>=0.5.5",
-    "torch>=2.10.0",
-    "transformers>=5.1.0",
-    "uvicorn[standard]>=0.40.0",
+    "torch>=2.4.0",
+    "transformers>=4.44.0",
+    "uvicorn[standard]>=0.30.0",
     "websockets>=16.0",
+    "firebase-admin>=6.6.0",
 ]
 
 [project.optional-dependencies]

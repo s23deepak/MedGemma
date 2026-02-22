@@ -263,6 +263,7 @@
                     <a href="/compliance">Compliance</a>
                     <a href="/council" class="active">Diagnostic Council</a>
                     <a href="/patient-portal">Patient Portal</a>
+                    <a href="/ai-portal">AI Chat Portal</a>
                 </div>
             </div>
             <div class="nav-user">
@@ -276,7 +277,16 @@
                 diagnoses</p>
 
             <section class="case-input">
-                <h2>📋 Case Information</h2>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h2 style="margin-bottom: 0;">📋 Case Information</h2>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <label for="patientSelect" style="font-weight: 600;">Load Patient:</label>
+                        <select id="patientSelect" onchange="loadPatientData(this.value)"
+                            style="padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-primary); font-family: inherit;">
+                            <option value="">-- Manual Entry --</option>
+                        </select>
+                    </div>
+                </div>
                 <div class="input-grid">
                     <div class="input-group">
                         <label>Presenting Symptoms (comma-separated)</label>
@@ -371,6 +381,67 @@
                     document.getElementById('deliberateBtn').disabled = false;
                 }
             }
+
+            async function loadPatients() {
+                try {
+                    const response = await fetch('/api/patients');
+                    const data = await response.json();
+                    const select = document.getElementById('patientSelect');
+                    data.patients.forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p.id;
+                        opt.textContent = `${p.id} - ${p.name}`;
+                        select.appendChild(opt);
+                    });
+                } catch (e) {
+                    console.error('Error loading patients:', e);
+                }
+            }
+
+            async function loadPatientData(patientId) {
+                if (!patientId) return;
+
+                try {
+                    const response = await fetch(`/api/patients/${patientId}`);
+                    const data = await response.json();
+
+                    const p = data.patient;
+                    let history = `${p.age}yo ${p.gender}`;
+                    if (data.conditions && data.conditions.length > 0) {
+                        history += `, ${data.conditions.map(c => c.name).join(', ')}`;
+                    }
+                    if (data.allergies && data.allergies.length > 0) {
+                        history += `, Allergies: ${data.allergies.map(a => a.substance).join(', ')}`;
+                    }
+                    document.getElementById('history').value = history;
+
+                    const vitalsKeys = ['Blood Pressure', 'Heart Rate', 'Body Temperature', 'Respiratory Rate', 'SpO2', 'BMI'];
+                    const vitals = [];
+                    const otherObs = [];
+
+                    if (data.recent_observations) {
+                        data.recent_observations.forEach(o => {
+                            if (vitalsKeys.includes(o.type)) {
+                                vitals.push(`${o.type}: ${o.value}`);
+                            } else {
+                                otherObs.push(`${o.type}: ${o.value}`);
+                            }
+                        });
+                    }
+
+                    document.getElementById('vitals').value = vitals.join(', ');
+                    document.getElementById('imaging').value = otherObs.join('\\n');
+
+                    // Clear symptoms as they change per visit
+                    document.getElementById('symptoms').value = '';
+                    document.getElementById('symptoms').focus();
+
+                } catch (e) {
+                    console.error('Error fetching patient data:', e);
+                }
+            }
+
+            document.addEventListener('DOMContentLoaded', loadPatients);
 
             function renderDeliberation(data) {
                 document.getElementById('deliberationResults').style.display = 'block';

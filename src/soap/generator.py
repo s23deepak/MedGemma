@@ -364,31 +364,38 @@ class SOAPGenerator:
         )
         
         if self.clinical_intel:
+            # Ensure patient_context is a proper dict before passing it down
+            pc = patient_context if isinstance(patient_context, dict) else None
+
             # Extract symptoms from transcription for differential
             symptoms = self._extract_symptoms(transcription)
-            
+
             # Generate differential diagnoses with confidence
             differentials = self.clinical_intel.generate_differential_with_confidence(
                 symptoms=symptoms,
-                patient_history=patient_context,
+                patient_history=pc,
                 imaging_findings=image_findings
             )
             enhanced.differentials = [d.to_dict() for d in differentials]
-            
+
             # Check for critical findings
             all_text = f"{transcription} {image_findings or ''}"
             critical_alerts = self.clinical_intel.detect_critical_findings(
-                all_text, 
+                all_text,
                 source="clinical_encounter"
             )
             enhanced.critical_alerts = [a.to_dict() for a in critical_alerts]
-            
-            # Check drug interactions
-            if patient_context and "medications" in patient_context:
-                current_meds = [m.get("name", "") for m in patient_context["medications"]]
+
+            # Check drug interactions — only when we have a real dict with a medications list
+            if pc and isinstance(pc.get("medications"), list):
+                current_meds = [
+                    m.get("name", "") if isinstance(m, dict) else str(m)
+                    for m in pc["medications"]
+                ]
+                current_meds = [m for m in current_meds if m]  # drop empty strings
                 interactions = self.clinical_intel.check_drug_interactions(current_meds)
                 enhanced.drug_interactions = [i.to_dict() for i in interactions]
-            
+
             # Extract evidence citations
             citations = self.clinical_intel.extract_evidence_citations(
                 base_soap.assessment,

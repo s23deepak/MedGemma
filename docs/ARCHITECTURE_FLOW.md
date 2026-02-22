@@ -1,174 +1,272 @@
-# MedGemma Clinical Assistant - Architecture Flow
+# MedGemma Clinical Assistant — Architecture Flow
 
-## End-to-End Process Flow
+## 1. End-to-End Encounter Flow
 
-```mermaid
-flowchart TB
-    subgraph User["👨‍⚕️ Physician Interface"]
-        A[Voice Input / Text] --> B[Upload X-ray Image]
-    end
-
-    subgraph Frontend["🖥️ Web UI"]
-        B --> C[WebSocket ASR]
-        C --> D[Real-time Transcription]
-    end
-
-    subgraph Router["🔀 FunctionGemma Router (270M)"]
-        D --> E{Query Type?}
-        E -->|Simple Action| F[Tool Selection]
-        E -->|Medical Query| G[Escalate to MedGemma]
-    end
-
-    subgraph Tools["🔧 Healthcare Tools"]
-        F --> H[fetch_patient_ehr]
-        F --> I[schedule_appointment]
-        F --> J[order_lab_tests]
-        F --> K[notify_care_team]
-        F --> L[check_drug_interactions]
-    end
-
-    subgraph MedGemma["🧠 MedGemma (4B)"]
-        G --> M[analyze_medical_image]
-        G --> N[generate_soap_note]
-        M --> O[Clinical Reasoning]
-        N --> O
-    end
-
-    subgraph Clinical["📊 Clinical Intelligence"]
-        O --> P[ICD-10 Codes]
-        O --> Q[Confidence Scores]
-        O --> R[Critical Alerts]
-        O --> S[Drug Interactions]
-        O --> T[Differential Diagnosis]
-    end
-
-    subgraph Output["📋 Enhanced SOAP Note"]
-        P --> U[Final Report]
-        Q --> U
-        R --> U
-        S --> U
-        T --> U
-        H --> U
-    end
-
-    subgraph Approval["✅ Physician Approval"]
-        U --> V{Approve?}
-        V -->|Yes| W[Update EHR]
-        V -->|No| X[Edit & Resubmit]
-    end
-
-    W --> Y[(FHIR EHR)]
+```
+  ┌────────────────┐     ┌──────────────────┐
+  │ Voice / Text   │     │ X-ray Image      │
+  │ Input          │     │ Upload           │
+  └───────┬────────┘     └────────┬─────────┘
+          │                       │
+          ▼                       ▼
+  ┌───────────────────────────────────────────┐
+  │          FunctionGemma Router (270M)      │
+  │                                           │
+  │  Simple action?──► Tool Execution         │
+  │  Medical query?──► Escalate to MedGemma   │
+  └───────────────────┬───────────────────────┘
+                      │
+                      ▼
+  ┌───────────────────────────────────────────┐
+  │          MedGemma 4B (Multimodal)         │
+  │  • Vision Encoder (SigLIP)                │
+  │  • Medical Reasoning                      │
+  │  • SOAP Note Generation                   │
+  └───────────────────┬───────────────────────┘
+                      │
+          ┌───────────┼───────────┐
+          ▼           ▼           ▼
+  ┌──────────┐ ┌───────────┐ ┌───────────┐
+  │ Clinical │ │ Clinical  │ │ Mem0      │
+  │ Correlat │ │ Intel     │ │ Memory    │
+  │          │ │           │ │ Recall    │
+  │ Artifact │ │ ICD-10    │ │           │
+  │ Detect   │ │ Drug Ix   │ │ Past      │
+  │ Finding  │ │ Critical  │ │ Encounters│
+  │ Classify │ │ Alerts    │ │ Allergies │
+  └────┬─────┘ └─────┬─────┘ └─────┬─────┘
+       │              │              │
+       └──────────────┼──────────────┘
+                      ▼
+  ┌───────────────────────────────────────────┐
+  │          Enhanced SOAP Note               │
+  │  S: Subjective  │ O: Objective            │
+  │  A: Assessment   │ P: Plan                │
+  │  + ICD-10 codes, confidence, alerts       │
+  │  + Incidental vs correlated findings      │
+  └───────────────────┬───────────────────────┘
+                      │
+          ┌───────────┼───────────┐
+          ▼           ▼           ▼
+  ┌──────────┐ ┌───────────┐ ┌───────────┐
+  │Diagnostic│ │ SOAP      │ │ Physician │
+  │ Council  │ │ Compliance│ │ Approval  │
+  │          │ │           │ │           │
+  │ 5 Opins  │ │ Symptom   │ │ Approve   │
+  │ Consensus│ │ Flags     │ │ or Edit   │
+  └──────────┘ └───────────┘ └─────┬─────┘
+                                   │
+                                   ▼
+                            ┌────────────┐
+                            │ Update EHR │
+                            │ Save Mem0  │
+                            └────────────┘
 ```
 
 ---
 
-## Dual-Model Architecture
+## 2. Dual-Model Routing
 
-```mermaid
-flowchart LR
-    subgraph Input["Input Layer"]
-        A1[Text Query]
-        A2[Medical Image]
-        A3[Patient Context]
-    end
-
-    subgraph FG["FunctionGemma 270M"]
-        B1[Tool Router]
-        B2[Action Planner]
-        B3[Multi-step Workflow]
-    end
-
-    subgraph MG["MedGemma 4B"]
-        C1[Vision Encoder]
-        C2[Medical Reasoning]
-        C3[SOAP Generation]
-    end
-
-    subgraph Execute["Execution"]
-        D1[FHIR API]
-        D2[Scheduling System]
-        D3[Notification Service]
-    end
-
-    A1 --> B1
-    B1 -->|Simple| D1
-    B1 -->|Medical| C2
-    A2 --> C1
-    C1 --> C2
-    A3 --> C2
-    C2 --> C3
-    B2 --> D2
-    B3 --> D3
+```
+                    ┌─────────────────┐
+                    │ Incoming Query  │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │ Contains Image? │
+                    └───┬─────────┬───┘
+                   YES  │         │  NO
+                        ▼         ▼
+              ┌──────────┐  ┌─────────────┐
+              │ MedGemma │  │ Query Type? │
+              │ Vision   │  └──┬──────┬───┘
+              │ (4B)     │     │      │
+              └────┬─────┘  Simple  Clinical
+                   │         │      │
+                   │         ▼      ▼
+                   │    ┌────────┐ ┌──────────┐
+                   │    │Function│ │ MedGemma │
+                   │    │Gemma   │ │ Reasoning│
+                   │    │(270M)  │ │ (4B)     │
+                   │    └───┬────┘ └────┬─────┘
+                   │        │           │
+                   │        ▼           │
+                   │   ┌─────────┐      │
+                   │   │ Tool    │      │
+                   │   │Execute  │      │
+                   │   └───┬─────┘      │
+                   │       │            │
+                   ▼       ▼            ▼
+              ┌─────────────────────────────┐
+              │     Response to Physician   │
+              └─────────────────────────────┘
 ```
 
 ---
 
-## Request Processing Pipeline
+## 3. Clinical Correlation Pipeline
 
-```mermaid
-sequenceDiagram
-    participant P as Physician
-    participant UI as Web UI
-    participant FG as FunctionGemma
-    participant MG as MedGemma
-    participant FHIR as EHR System
-    participant CI as Clinical Intel
+```
+  ┌─────────────────────────────────┐
+  │ Imaging Findings from MedGemma  │
+  └──────────┬──────────────────────┘
+             │
+     ┌───────┴───────┐
+     ▼               ▼
+┌──────────┐   ┌──────────────┐
+│ Artifact │   │ Finding      │
+│ Detection│   │ Classifcation│
+└────┬─────┘   └──────┬───────┘
+     │                │
+     ▼                ▼
+┌──────────┐   ┌──────────────────────────────┐
+│ Quality  │   │ Correlate with Symptoms      │
+│          │   ├──────────────────────────────┤
+│Diagnostic│   │ CRITICAL ──► Immediate Alert │
+│Acceptable│   │ MATCHES  ──► Significant     │
+│Degraded  │   │ NO MATCH ──► Incidental      │
+│Non-Diag  │   │              + prevalence %  │
+└──────────┘   └──────────────────────────────┘
 
-    P->>UI: Start encounter + upload X-ray
-    UI->>FG: Route request
-    
-    alt Simple Action (scheduling, notifications)
-        FG->>FHIR: Execute tool directly
-        FHIR-->>UI: Result
-    else Medical Query (diagnosis, imaging)
-        FG->>MG: Escalate for reasoning
-        MG->>MG: Analyze image
-        MG->>CI: Get clinical intelligence
-        CI-->>MG: ICD-10, alerts, interactions
-        MG-->>UI: Enhanced SOAP note
-    end
-    
-    UI->>P: Display for approval
-    P->>UI: Approve
-    UI->>FHIR: Update patient record
+  Prevalence Database: 20+ entries from radiology literature
+  ─────────────────────────────────────────────────────────
+  disc bulge ........... 30-40% of asymptomatic adults
+  renal cyst ........... 27-32% of adults over 50
+  pulmonary nodule ..... 25-50% of chest CTs
+  meniscal tear ........ up to 36% over age 45
+  rotator cuff tear .... 20-54% of adults over 60
 ```
 
 ---
 
-## Tool Routing Decision Tree
+## 4. Registered Tools (9 total)
 
-```mermaid
-flowchart TD
-    A[Incoming Query] --> B{Contains Image?}
-    B -->|Yes| C[MedGemma Vision]
-    B -->|No| D{Query Type}
-    
-    D -->|"Schedule appointment"| E[schedule_appointment]
-    D -->|"Check medications"| F[check_drug_interactions]
-    D -->|"Get patient data"| G[fetch_patient_ehr]
-    D -->|"Notify team"| H[notify_care_team]
-    D -->|"Order labs"| I[order_lab_tests]
-    D -->|"Clinical question"| J[MedGemma Reasoning]
-    
-    C --> K[Clinical Intelligence]
-    J --> K
-    K --> L[Enhanced SOAP Note]
-    
-    E --> M{Requires Approval?}
-    I --> M
-    M -->|Yes| N[Queue for Physician]
-    M -->|No| O[Execute Immediately]
+```
+  ┌─────────────────────────────────────────────┐
+  │           FunctionGemma Tool Router          │
+  └──────────────────┬──────────────────────────┘
+                     │
+  ┌──────────────────┼──────────────────────────┐
+  │                  │                          │
+  ▼                  ▼                          ▼
+  EHR Tools        Action Tools          Memory Tools
+  ──────────       ────────────          ────────────
+  fetch_ehr        schedule_appt        recall_memory
+  update_ehr       order_lab_tests      save_memory
+  check_drug_ix    notify_care_team
+  get_prior_img
 ```
 
 ---
 
-## Component Summary
+## 5. Diagnostic Council
 
-| Layer | Component | Model/Tech | Purpose |
+```
+  ┌──────────────────────────────────────────┐
+  │   Case: Symptoms + History + Imaging     │
+  └────┬─────┬──────┬──────┬──────┬──────────┘
+       │     │      │      │      │
+       ▼     ▼      ▼      ▼      ▼
+     Op.1  Op.2   Op.3   Op.4   Op.5
+   (indep) (indep) (indep) (indep) (indep)
+       │     │      │      │      │
+       └─────┴──────┼──────┴──────┘
+                    ▼
+          ┌─────────────────┐
+          │ Consensus       │
+          │ Analysis        │
+          ├─────────────────┤
+          │ STRONG    >80%  │
+          │ MODERATE  60-80%│
+          │ WEAK      40-60%│
+          │ SPLIT     <40%  │
+          └─────────────────┘
+```
+
+---
+
+## 6. Patient Portal Safety
+
+```
+  ┌──────────────────┐
+  │ Patient Question │
+  └────────┬─────────┘
+           │
+  ┌────────▼──────────────┐
+  │ Emergency keywords?   │
+  │ chest pain, seizure,  │
+  │ bleeding, choking ... │
+  └───┬───────────────┬───┘
+     YES              NO
+      │                │
+      ▼                ▼
+  ┌────────┐   ┌──────────────┐
+  │ CALL   │   │ Guardrails?  │
+  │ 911    │   │ stop meds,   │
+  │ NOW    │   │ change dose  │
+  └────────┘   └──┬────────┬──┘
+                 YES       NO
+                  │         │
+                  ▼         ▼
+          ┌──────────┐ ┌─────────────┐
+          │ Redirect │ │ Categorize  │
+          │ to       │ │ & Answer    │
+          │ Provider │ │             │
+          └──────────┘ │ • Medication│
+                       │ • Symptoms  │
+                       │ • Appts     │
+                       │ • General   │
+                       └─────────────┘
+```
+
+---
+
+## 7. Request Sequence
+
+```
+  Physician        Web UI         FunctionGemma     MedGemma       EHR        Mem0
+     │                │                │               │            │           │
+     │──Start────────►│                │               │            │           │
+     │  encounter     │──Recall───────────────────────────────────────────────►│
+     │                │◄─Past encounters──────────────────────────────────────│
+     │                │──Route query──►│               │            │           │
+     │                │                │               │            │           │
+     │          ┌─────┼────────────────┼───────────────┼────────────┼───┐       │
+     │          │ ALT │ Simple action  │               │            │   │       │
+     │          │     │                │──Execute─────────────────►│   │       │
+     │          │     │◄───────────────┼──Result───────────────────│   │       │
+     │          ├─────┼────────────────┼───────────────┼────────────┼───┤       │
+     │          │     │ Medical query  │               │            │   │       │
+     │          │     │                │──Escalate───►│            │   │       │
+     │          │     │                │              ││ Analyze    │   │       │
+     │          │     │                │              ││ Correlate  │   │       │
+     │          │     │                │              ││ ICD-10     │   │       │
+     │          │     │◄───────────────┼──SOAP note──│            │   │       │
+     │          └─────┼────────────────┼───────────────┼────────────┼───┘       │
+     │                │                │               │            │           │
+     │◄──Display──────│                │               │            │           │
+     │──Approve──────►│                │               │            │           │
+     │                │──Update EHR──────────────────────────────►│           │
+     │                │──Save encounter───────────────────────────────────────►│
+     │                │                │               │            │           │
+```
+
+---
+
+## 8. Component Summary
+
+| Layer | Component | Technology | Purpose |
 |-------|-----------|------------|---------|
-| **Routing** | FunctionGemma | Gemma 3 270M | Fast tool selection |
-| **Reasoning** | MedGemma | 4B multimodal | Medical analysis |
-| **Vision** | MedGemma | SigLIP encoder | X-ray/CT analysis |
-| **Clinical** | Intelligence | Rule-based + ML | ICD-10, alerts |
-| **EHR** | FHIR Server | Mock/Real | Patient data |
-| **Frontend** | FastAPI + JS | WebSocket | Real-time UI |
+| Auth | Role-Based Access | Password + 4 Roles | Doctor, Nurse, Admin, Patient |
+| Routing | FunctionGemma | Gemma 3 270M | Tool selection and workflows |
+| Reasoning | MedGemma | 4B multimodal | Medical analysis and SOAP |
+| Correlation | Clinical Correlator | Rule-based | Artifact detection, incidental vs correlated |
+| Intelligence | Clinical Intel | Rule-based | ICD-10, drug interactions, alerts |
+| Council | Diagnostic Council | Multi-rollout | 5 opinions + consensus |
+| Compliance | SOAP Checker | Rule-based | Symptom flags, documentation rates |
+| Portal | Patient Assistant | NLP + Rules | Emergency detection, guardrails |
+| Memory | Mem0 | LLM + Vector DB | Persistent cross-encounter memory |
+| History | History Service | FHIR queries | Timeline, medications, imaging |
+| EHR | FHIR Server | Mock / Real | Patient data storage |
+| Frontend | FastAPI + JS | WebSocket + REST | Real-time UI, 4 feature pages |
+| Testing | pytest | 72 tests | Full coverage, no GPU needed |

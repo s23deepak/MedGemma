@@ -9,3 +9,8 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# Firebase credentials 
+firebase-key.json
+*-firebase-adminsdk-*.json
+

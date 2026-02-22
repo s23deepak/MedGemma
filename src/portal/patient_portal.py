@@ -7,6 +7,10 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Any
 from enum import Enum
+import logging
+import re
+
+logger = logging.getLogger(__name__)
 
 
 class QueryCategory(str, Enum):
@@ -29,6 +33,7 @@ class PatientQuery:
     category: QueryCategory
     response: str
     requires_followup: bool
+    ai_generated: bool = False
     references: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
     
@@ -40,6 +45,7 @@ class PatientQuery:
             "category": self.category.value,
             "response": self.response,
             "requires_followup": self.requires_followup,
+            "ai_generated": self.ai_generated,
             "references": self.references,
             "created_at": self.created_at.isoformat()
         }
@@ -60,21 +66,49 @@ RESTRICTED_TOPICS = [
     "legal", "malpractice"
 ]
 
+# Patient-safe system prompt for MedGemma
+PATIENT_SYSTEM_PROMPT = """You are a patient-facing healthcare assistant for a hospital portal.
+Your role is to help patients understand their care AFTER a medical appointment.
+
+CRITICAL SAFETY RULES — you MUST follow these at all times:
+1. NEVER provide a specific diagnosis. Always say "your doctor can confirm..."
+2. NEVER recommend starting, stopping, or adjusting medication dosages.
+3. NEVER replace professional medical advice. Always recommend consulting their provider for serious concerns.
+4. If the patient describes symptoms that could be an emergency, tell them to call 911 or go to the ER immediately.
+5. Be warm, empathetic, and use plain language a non-medical person can understand.
+6. Keep responses concise — 2-4 sentences for simple questions, up to a short paragraph for complex ones.
+7. When discussing side effects or symptoms, always include "If this persists or worsens, contact your healthcare provider."
+
+You may helpfully explain:
+- General information about medications (what they're for, common side effects)
+- What symptoms or side effects commonly mean in general terms
+- When to seek medical attention
+- General lifestyle and wellness guidance
+- How to prepare for appointments
+- What to expect from common procedures
+
+Patient context will be provided when available. Use it to give more personalized (but still safe) responses.
+
+If the patient asks you to remember, note down, or store any information for future reference, include `[STORE_MEMORY: <concise fact>]` at the end of your response. Only include this tag when the patient explicitly wants something remembered."""
+
 
 class PatientAssistant:
     """
     AI assistant for patient post-appointment queries.
     Includes guardrails for safe responses.
+    Routes safe questions through MedGemma when available.
     """
     
-    def __init__(self, agent=None):
+    def __init__(self, agent=None, fhir_server=None):
         """
         Initialize the patient assistant.
         
         Args:
-            agent: Optional MedGemma agent for more advanced responses
+            agent: Optional MedGemma/Healthcare agent for AI-powered responses
+            fhir_server: Optional FHIR server (Firestore or mock) for patient data
         """
         self.agent = agent
+        self.fhir_server = fhir_server
         self.query_history: list[PatientQuery] = []
         self.faq = self._load_faq()
     
@@ -122,7 +156,7 @@ class PatientAssistant:
         # Categorize by topic
         if any(word in question_lower for word in ["medication", "medicine", "drug", "pill", "dose", "prescription"]):
             return QueryCategory.MEDICATION
-        elif any(word in question_lower for word in ["symptom", "pain", "ache", "feel", "hurts"]):
+        elif any(word in question_lower for word in ["symptom", "pain", "ache", "feel", "hurts", "dizzy", "nausea"]):
             return QueryCategory.SYMPTOMS
         elif any(word in question_lower for word in ["appointment", "visit", "schedule", "book"]):
             return QueryCategory.APPOINTMENT
@@ -171,29 +205,141 @@ class PatientAssistant:
                 return faq_answer
         
         return None
-    
-    def _generate_response(self, question: str, category: QueryCategory) -> tuple[str, bool, list[str]]:
+
+    def _ask_medgemma(self, question: str, category: QueryCategory, patient_context: dict | None = None, patient_id: str | None = None) -> str | None:
         """
-        Generate a response to the patient's question.
-        
-        Returns:
-            tuple of (response, requires_followup, references)
+        Route the question to MedGemma with patient-safe system prompt.
+        Returns the AI response, or None if the agent is unavailable.
         """
-        # Check for emergency
-        if category == QueryCategory.EMERGENCY:
-            return self._get_emergency_response(), True, []
+        if self.agent is None:
+            return None
         
-        # Check guardrails
-        guardrail_response = self._check_guardrails(question)
-        if guardrail_response:
-            return guardrail_response, True, []
+        try:
+            # Build a patient-context-aware prompt
+            prompt_parts = [PATIENT_SYSTEM_PROMPT, "\n---\n"]
+            
+            if patient_context:
+                prompt_parts.append("Patient context:\n")
+                # Patient info is nested under 'patient' key
+                patient_info = patient_context.get("patient", patient_context)
+                if isinstance(patient_info, dict):
+                    if "name" in patient_info:
+                        prompt_parts.append(f"- Name: {patient_info['name']}\n")
+                    if "age" in patient_info:
+                        prompt_parts.append(f"- Age: {patient_info['age']}\n")
+                    if "gender" in patient_info:
+                        prompt_parts.append(f"- Gender: {patient_info['gender']}\n")
+                if "conditions" in patient_context:
+                    conds = patient_context["conditions"]
+                    if isinstance(conds, list):
+                        names = [c.get("name", str(c)) if isinstance(c, dict) else str(c) for c in conds]
+                        conditions = ", ".join(names)
+                    else:
+                        conditions = str(conds)
+                    prompt_parts.append(f"- Active conditions: {conditions}\n")
+                if "medications" in patient_context:
+                    meds = patient_context["medications"]
+                    if isinstance(meds, list):
+                        names = [m.get("name", str(m)) if isinstance(m, dict) else str(m) for m in meds]
+                        medications = ", ".join(names)
+                    else:
+                        medications = str(meds)
+                    prompt_parts.append(f"- Current medications: {medications}\n")
+                if "allergies" in patient_context:
+                    allergies = patient_context["allergies"]
+                    if isinstance(allergies, list):
+                        names = [a.get("substance", str(a)) if isinstance(a, dict) else str(a) for a in allergies]
+                        allergy_str = ", ".join(names)
+                    else:
+                        allergy_str = str(allergies)
+                    prompt_parts.append(f"- Allergies: {allergy_str}\n")
+                prompt_parts.append("\n")
+                
+            # Inject stored memories
+            if self.fhir_server is not None and hasattr(self.fhir_server, 'get_memories'):
+                try:
+                    pid = patient_id or (patient_context.get("patient", {}).get("id", "") if patient_context else "")
+                    if pid:
+                        memories = self.fhir_server.get_memories(pid)
+                        if memories:
+                            prompt_parts.append("Stored notes & patient memories:\n")
+                            for mem in memories:
+                                prompt_parts.append(f"- {mem}\n")
+                            prompt_parts.append("\n")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch memories for prompt: {e}")
+            
+            # Include appointment data if asking about appointments
+            if category == QueryCategory.APPOINTMENT and self.fhir_server is not None:
+                try:
+                    pid = patient_id or (patient_context.get("patient", {}).get("id", "") if patient_context else "")
+                    if pid:
+                        appt = self.get_appointment_summary(pid)
+                        if appt:
+                            prompt_parts.append("Appointment information:\n")
+                            prompt_parts.append(f"- Last appointment date: {appt.get('date', 'N/A')}\n")
+                            prompt_parts.append(f"- Provider: {appt.get('provider', 'N/A')}\n")
+                            prompt_parts.append(f"- Visit type: {appt.get('type', 'N/A')}\n")
+                            prompt_parts.append(f"- Next appointment: {appt.get('followup_date', 'N/A')}\n")
+                            if appt.get('instructions'):
+                                prompt_parts.append(f"- Instructions: {'; '.join(appt['instructions'])}\n")
+                            prompt_parts.append("\n")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch appointment for prompt: {e}")
+            
+            prompt_parts.append(f"Query category: {category.value}\n")
+            prompt_parts.append(f"Patient question: {question}\n\n")
+            prompt_parts.append("Provide a helpful, safe, and empathetic response:")
+            
+            full_prompt = "".join(prompt_parts)
+            print("******************************full_prompt**********************************")
+            print(full_prompt)
+            print("******************************full_prompt**********************************")
+            
+            # Use agent.chat() (MedGemmaAgent) or agent.process_query() (HealthcareAgent)
+            if hasattr(self.agent, 'chat'):
+                response = self.agent.chat(full_prompt)
+            elif hasattr(self.agent, 'process_query'):
+                result = self.agent.process_query(query=full_prompt, patient_context=patient_context)
+                response = result.get("response", "")
+            else:
+                logger.warning(f"Agent {type(self.agent).__name__} has no chat or process_query method")
+                return None
+                
+            # Parse memory tags
+            if response:
+                memory_tags = re.findall(r'\[STORE_MEMORY:\s*(.*?)\]', response)
+                for memory_fact in memory_tags:
+                    if self.fhir_server is not None and hasattr(self.fhir_server, 'add_memory'):
+                        try:
+                            pid = patient_id or (patient_context.get("patient", {}).get("id", "") if patient_context else "")
+                            if pid:
+                                self.fhir_server.add_memory(pid, memory_fact.strip())
+                                logger.info(f"Stored memory for {pid}: {memory_fact.strip()}")
+                        except Exception as e:
+                            logger.warning(f"Failed to store memory: {e}")
+                
+                # Strip tags from the final response
+                response = re.sub(r'\[STORE_MEMORY:\s*.*?\]', '', response).strip()
+            
+            # Strip simulated prefix if present
+            if response and response.startswith("[Simulated]"):
+                response = response.replace("[Simulated] Processed query: ", "").rstrip(".")
+                if len(response) < 20:
+                    return None
+            
+            if response:
+                logger.info(f"MedGemma responded to patient query (category={category.value})")
+                return response
+                
+        except Exception as e:
+            import traceback
+            logger.warning(f"MedGemma patient query failed: {e}\n{traceback.format_exc()}")
         
-        # Check FAQ
-        faq_match = self._find_faq_match(question)
-        if faq_match:
-            return faq_match, False, ["Patient FAQ"]
-        
-        # Generate category-specific response
+        return None
+
+    def _get_fallback_response(self, category: QueryCategory) -> tuple[str, bool, list[str]]:
+        """Get hardcoded fallback response when no AI agent is available."""
         responses = {
             QueryCategory.MEDICATION: (
                 "For questions about your medication, I recommend:\n\n"
@@ -252,21 +398,55 @@ class PatientAssistant:
         }
         
         return responses.get(category, responses[QueryCategory.GENERAL])
+
+    def _generate_response(self, question: str, category: QueryCategory, patient_context: dict | None = None, patient_id: str | None = None) -> tuple[str, bool, list[str], bool]:
+        """
+        Generate a response to the patient's question.
+        
+        Returns:
+            tuple of (response, requires_followup, references, ai_generated)
+        """
+        # 1. Emergency — always hardcoded, never AI
+        if category == QueryCategory.EMERGENCY:
+            return self._get_emergency_response(), True, [], False
+        
+        # 2. Guardrails — always hardcoded, never AI
+        guardrail_response = self._check_guardrails(question)
+        if guardrail_response:
+            return guardrail_response, True, [], False
+        
+        # 3. Try MedGemma for a real AI response
+        ai_response = self._ask_medgemma(question, category, patient_context, patient_id=patient_id)
+        if ai_response:
+            # Determine if follow-up is needed based on category
+            needs_followup = category in (QueryCategory.SYMPTOMS, QueryCategory.DIAGNOSIS)
+            return ai_response, needs_followup, ["MedGemma AI"], True
+        
+        # 4. Check FAQ as fallback
+        faq_match = self._find_faq_match(question)
+        if faq_match:
+            return faq_match, False, ["Patient FAQ"], False
+        
+        # 5. Hardcoded category-based fallback
+        return (*self._get_fallback_response(category), False)
     
-    def ask(self, patient_id: str, question: str) -> PatientQuery:
+    def ask(self, patient_id: str, question: str, patient_context: dict | None = None) -> PatientQuery:
         """
         Process a patient's question.
         
         Args:
             patient_id: The patient's ID
             question: The patient's question
+            patient_context: Optional EHR context for the patient
             
         Returns:
             PatientQuery with the response
         """
         query_id = f"Q-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         category = self._categorize_query(question)
-        response, requires_followup, references = self._generate_response(question, category)
+        response, requires_followup, references, ai_generated = self._generate_response(
+            question, category, patient_context, patient_id=patient_id
+        )
         
         query = PatientQuery(
             query_id=query_id,
@@ -275,6 +455,7 @@ class PatientAssistant:
             category=category,
             response=response,
             requires_followup=requires_followup,
+            ai_generated=ai_generated,
             references=references
         )
         
@@ -282,8 +463,38 @@ class PatientAssistant:
         return query
     
     def get_appointment_summary(self, patient_id: str) -> dict:
-        """Get a summary of the patient's recent appointment."""
-        # Mock appointment summary
+        """Get a summary of the patient's recent appointment from FHIR server."""
+        # Try to get from FHIR server (Firestore or mock)
+        if self.fhir_server is not None:
+            try:
+                # FirestoreFHIRServer has get_appointment_summary
+                if hasattr(self.fhir_server, 'get_appointment_summary'):
+                    appointment = self.fhir_server.get_appointment_summary(patient_id)
+                    if appointment:
+                        return appointment
+                
+                # Build from patient summary if no appointment data
+                summary = self.fhir_server.get_patient_summary(patient_id)
+                if summary:
+                    return {
+                        "date": "Recent",
+                        "provider": "Your care team",
+                        "type": "Follow-up Visit",
+                        "diagnoses": [c["name"] for c in summary.get("conditions", [])],
+                        "medications": [
+                            {"name": m["name"], "instructions": m.get("dosage", "As prescribed")}
+                            for m in summary.get("medications", [])
+                        ],
+                        "instructions": [
+                            "Continue current medications",
+                            "Follow up with your provider as scheduled"
+                        ],
+                        "followup_date": "As scheduled"
+                    }
+            except Exception as e:
+                logger.warning(f"Failed to get appointment from FHIR: {e}")
+        
+        # Fallback: hardcoded mock
         return {
             "date": "February 5, 2026",
             "provider": "Dr. Sarah Smith",
@@ -310,9 +521,15 @@ class PatientAssistant:
 # Singleton instance
 _patient_assistant = None
 
-def get_patient_assistant() -> PatientAssistant:
+def get_patient_assistant(agent=None, fhir_server=None) -> PatientAssistant:
     """Get or create the patient assistant singleton."""
     global _patient_assistant
     if _patient_assistant is None:
-        _patient_assistant = PatientAssistant()
+        _patient_assistant = PatientAssistant(agent=agent, fhir_server=fhir_server)
+    else:
+        # Update agent/fhir_server if they were loaded after initial creation
+        if agent is not None and _patient_assistant.agent is None:
+            _patient_assistant.agent = agent
+        if fhir_server is not None and _patient_assistant.fhir_server is None:
+            _patient_assistant.fhir_server = fhir_server
     return _patient_assistant

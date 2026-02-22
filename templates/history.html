@@ -222,6 +222,7 @@
                     <a href="/compliance">Compliance</a>
                     <a href="/council">Diagnostic Council</a>
                     <a href="/patient-portal">Patient Portal</a>
+                    <a href="/ai-portal">AI Chat Portal</a>
                 </div>
             </div>
             <div class="nav-user">
@@ -312,7 +313,12 @@
                         document.getElementById('patientGender').textContent = data.patient.gender;
                     }
 
-                    renderTimeline(data.timeline, category);
+                    // Save timeline globally so tabs can filter it
+                    window.currentTimeline = data.timeline;
+
+                    // Re-apply the current active tab filter (ignoring the dropdown for now, or letting tabs override)
+                    const activeTab = document.querySelector('.tab.active').dataset.tab;
+                    loadTabContent(activeTab);
                 } catch (error) {
                     console.error('Error fetching history:', error);
                 }
@@ -330,21 +336,73 @@
                     ? timeline
                     : timeline.filter(item => item.category === categoryFilter);
 
-                container.innerHTML = filtered.map(item => `
-                <div class="timeline-item">
-                    <div class="timeline-date">
-                        ${item.date_display}
-                        <span class="category-badge category-${item.category}">${item.category}</span>
+                if (filtered.length === 0) {
+                    container.innerHTML = '<div class="empty-state"><p>No matching entries found for this tab.</p></div>';
+                    return;
+                }
+
+                // Group items by date, then by category
+                const groupedByDateAndCategory = {};
+                filtered.forEach(item => {
+                    if (!groupedByDateAndCategory[item.date_display]) {
+                        groupedByDateAndCategory[item.date_display] = {};
+                    }
+                    if (!groupedByDateAndCategory[item.date_display][item.category]) {
+                        groupedByDateAndCategory[item.date_display][item.category] = [];
+                    }
+                    groupedByDateAndCategory[item.date_display][item.category].push(item);
+                });
+
+                let html = '';
+                for (const [date, categories] of Object.entries(groupedByDateAndCategory)) {
+                    html += `
+                    <div class="timeline-date-header" style="font-weight: 600; font-size: 1.1rem; color: var(--primary); margin: 2rem 0 1rem 0;">
+                        ${date}
                     </div>
-                    <div class="timeline-title">${item.title}</div>
-                    <div class="timeline-details">${item.details}</div>
-                </div>
-            `).join('');
+                    `;
+
+                    for (const [category, items] of Object.entries(categories)) {
+                        html += `
+                        <div class="timeline-category-group" style="margin-left: 1rem; margin-bottom: 1.5rem;">
+                            <div style="margin-bottom: 0.75rem;">
+                                <span class="category-badge category-${category}">${category}</span>
+                            </div>
+                            <div class="category-items" style="display: flex; flex-direction: column; gap: 1rem; border-left: 2px solid var(--border); padding-left: 1rem; margin-left: 0.5rem;">
+                        `;
+
+                        items.forEach(item => {
+                            html += `
+                                <div class="timeline-item" style="margin-bottom: 0px; box-shadow: none; border: 1px solid var(--border);">
+                                    <div class="timeline-title">${item.title}</div>
+                                    <div class="timeline-details">${item.details}</div>
+                                </div>
+                            `;
+                        });
+
+                        html += `
+                            </div>
+                        </div>
+                        `;
+                    }
+                }
+
+                container.innerHTML = html;
             }
 
             function loadTabContent(tab) {
-                // Switch content based on tab
-                console.log('Loading tab:', tab);
+                if (!window.currentTimeline) return;
+
+                let filterCategory = 'all';
+                if (tab === 'medications') filterCategory = 'medication';
+                else if (tab === 'imaging') filterCategory = 'imaging'; // or observation if we want something to show
+                else if (tab === 'encounters') filterCategory = 'condition'; // Mapping encounters to condition for demo
+
+                // If the backend natively supports 'imaging' and 'encounter' categories in timeline, 
+                // this will filter them correctly. If not, it will show an empty state which is accurate.
+                // Reset dropdown to "all" to avoid confusion
+                document.getElementById('categoryFilter').value = 'all';
+
+                renderTimeline(window.currentTimeline, filterCategory);
             }
 
             // Load demo data on page load

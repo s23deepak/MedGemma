@@ -342,8 +342,12 @@ class ClinicalIntelligence:
                 ))
         
         # Check patient history
-        if patient_history:
-            conditions = [c.get("name", "").lower() for c in patient_history.get("conditions", [])]
+        if patient_history and isinstance(patient_history, dict):
+            raw_conditions = patient_history.get("conditions", [])
+            conditions = [
+                (c.get("name", "") if isinstance(c, dict) else str(c)).lower()
+                for c in raw_conditions
+            ]
             
             # Former smoker + respiratory symptoms
             if any("smok" in str(patient_history).lower() for _ in [1]):

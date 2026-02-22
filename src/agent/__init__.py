@@ -22,12 +22,23 @@ except ImportError:
     AgentAction = None
     AgentPlan = None
 
+try:
+    from .vllm_manager import VLLMModelManager, get_vllm_manager, is_vllm_manager_available
+except ImportError:
+    VLLMModelManager = None
+    get_vllm_manager = None
+    is_vllm_manager_available = lambda: False
+
 __all__ = [
     # Core agents
     "MedGemmaAgent",
     "MedGemmaVLLMAgent",
     "FunctionGemmaAgent",
     "HealthcareAgent",
+    # vLLM sleep-mode manager
+    "VLLMModelManager",
+    "get_vllm_manager",
+    "is_vllm_manager_available",
     # Agent types
     "AgentAction",
     "AgentPlan",

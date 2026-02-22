@@ -59,8 +59,8 @@ class PatientHistoryService:
         
         # Add conditions
         for condition in summary.get("conditions", []):
-            onset = condition.get("onset_date")
-            if onset:
+            onset = condition.get("onset_date") or condition.get("onset")
+            if onset and onset != "Unknown":
                 try:
                     date = datetime.fromisoformat(onset)
                     entries.append(HistoryEntry(
@@ -74,8 +74,8 @@ class PatientHistoryService:
         
         # Add medications
         for med in summary.get("medications", []):
-            start = med.get("start_date")
-            if start:
+            start = med.get("start_date") or med.get("date") or datetime.now().isoformat()
+            if start and start != "Unknown":
                 try:
                     date = datetime.fromisoformat(start)
                     entries.append(HistoryEntry(
@@ -88,16 +88,31 @@ class PatientHistoryService:
                     pass
         
         # Add observations
-        for obs in summary.get("observations", []):
+        for obs in summary.get("observations", []) or summary.get("recent_observations", []):
             obs_date = obs.get("date")
-            if obs_date:
+            if obs_date and obs_date != "Unknown":
                 try:
-                    date = datetime.fromisoformat(obs_date)
+                    date = datetime.fromisoformat(obs_date.replace("Z", "+00:00")).replace(tzinfo=None)
                     entries.append(HistoryEntry(
                         date=date,
                         category="observation",
                         title=obs.get("type", "Observation"),
-                        details=f"Value: {obs.get('value', 'N/A')} {obs.get('unit', '')}"
+                        details=f"Value: {obs.get('value', 'N/A')} {obs.get('unit', '')}".strip()
+                    ))
+                except ValueError:
+                    pass
+                    
+        # Add imaging studies
+        for img in summary.get("images", []):
+            img_date = img.get("timestamp") or img.get("date")
+            if img_date and img_date != "Unknown":
+                try:
+                    date = datetime.fromisoformat(img_date.replace("Z", "+00:00")).replace(tzinfo=None)
+                    entries.append(HistoryEntry(
+                        date=date,
+                        category="imaging",
+                        title=f"{str(img.get('modality', 'Imaging')).upper()} Study",
+                        details=img.get("analysis") or img.get("description", "Imaging study performed")
                     ))
                 except ValueError:
                     pass
@@ -207,9 +222,9 @@ class PatientHistoryService:
 # Singleton instance
 _history_service = None
 
-def get_history_service() -> PatientHistoryService:
+def get_history_service(fhir_server=None) -> PatientHistoryService:
     """Get or create the history service singleton."""
     global _history_service
     if _history_service is None:
-        _history_service = PatientHistoryService()
+        _history_service = PatientHistoryService(fhir_server=fhir_server)
     return _history_service
