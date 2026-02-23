@@ -5,7 +5,7 @@
 ---
 
 ## Setup Checklist
-- [ ] Server running: `uv run python main.py`
+- [ ] Server running: `SIMULATED_MODE=true uv run python main.py`
 - [ ] Browser at: http://localhost:8000
 - [ ] Sample X-ray ready: `data/sample_images/chest_xray_demo.png`
 - [ ] Microphone working
@@ -29,14 +29,15 @@
 *(Show the clean UI loading)*
 
 **[NARRATION]** (optional voiceover)
-> "This is MedGemma Clinical Assistant - an AI-powered tool that helps physicians 
-> catch missed diagnoses and generate documentation in real-time."
+> "This is MedGemma Clinical Assistant — an AI-powered tool that helps physicians
+> catch missed diagnoses, ground decisions in live literature, and generate
+> documentation in real-time."
 
 ---
 
 ### Act 2: Select Patient (10 seconds)
 1. Click on **Sarah Wilson** in the patient list
-2. *(Show EHR data loading - conditions, medications, allergies)*
+2. *(Show EHR data loading — conditions, medications, allergies)*
 
 ---
 
@@ -51,66 +52,88 @@
 Click **Start Recording** and speak naturally:
 
 ```
-Patient is a 58-year-old female presenting today with a 
-three-week history of persistent dry cough and mild shortness 
+Patient is a 58-year-old female presenting today with a
+three-week history of persistent dry cough and mild shortness
 of breath on exertion.
 
-She reports the cough started after a cold about a month ago 
-and has not improved. She denies fever, chills, or night sweats. 
-No hemoptysis. She quit smoking seven years ago after a 
+She reports the cough started after a cold about a month ago
+and has not improved. She denies fever, chills, or night sweats.
+No hemoptysis. She quit smoking seven years ago after a
 20-pack-year history.
 
-On examination, vital signs are stable. Blood pressure 138 over 82. 
+On examination, vital signs are stable. Blood pressure 138 over 82.
 Heart rate 78. Oxygen saturation 96 percent on room air.
 
 Lungs: Mild expiratory wheezing bilaterally, no crackles or rhonchi.
 Heart: Regular rate and rhythm, no murmurs.
 No peripheral edema.
 
-The chest X-ray shows... let me review the image...
-
-[PAUSE - look at the screen as if reviewing]
-
-There appears to be some increased interstitial markings in the 
-right lower lobe. I'm considering asthma exacerbation versus 
-early pneumonia versus... I want to make sure we're not missing 
-anything here.
+The chest X-ray shows increased interstitial markings in the
+right lower lobe. I'm considering asthma exacerbation versus
+early pneumonia. I want to make sure we're not missing anything.
 ```
 
 Click **Stop Recording**
 
 ---
 
-### Act 5: Generate SOAP Note (20 seconds)
+### Act 5: Generate SOAP Note & PubMed (25 seconds)
 1. Click **Generate SOAP Note**
 2. *(Watch the AI process and generate the note)*
 3. **HIGHLIGHT** the "Potential Missed Diagnoses" section if it appears
-   - This is your key differentiator!
+4. *(After a few seconds, the **📚 PubMed Literature** card appears in the right panel)*
+5. Click to expand it — show **rare diagnoses** and **citations** from actual PubMed articles
+   - This is your key differentiator: real-time evidence grounding!
 
 ---
 
-### Act 6: Review & Approve (15 seconds)
-1. Scroll through the generated SOAP note
-2. Show the Subjective/Objective/Assessment/Plan sections
-3. Click **Approve & Save to EHR**
-4. *(Show confirmation toast)*
+### Act 6: Diagnostic Council (30 seconds)
+1. Navigate to **Diagnostic Council** in the nav
+2. The patient information is pre-loaded — enter the symptoms: `chest pain, shortness of breath, cough`
+3. Click **🧠 Start Council Deliberation**
+4. *(5 independent AI opinions appear with consensus scoring)*
+5. **HIGHLIGHT** the **📚 PubMed — Zebra Hunt Results** panel below the discussion
+   - Show rare diagnoses the council flagged from literature that might otherwise be missed
 
 ---
 
-### Act 7: Closing (10 seconds)
+### Act 7: AI Chat Portal (30 seconds)
+1. Navigate to **AI Chat Portal**
+2. Select **Sarah Wilson** in the left panel
+3. Upload the same chest X-ray into the center panel
+4. Draw an **annotation box** around the right lower lobe opacity
+5. Type: `"What rare conditions could cause right lower lobe changes in a former smoker?"`
+6. *(MedGemma responds with reasoning)*
+7. *(The **📊 Evidence Check** pill appears below — click to expand PubMed literature)*
+
+---
+
+### Act 8: Review & Approve Encounter (15 seconds)
+1. Return to the **Encounters** page
+2. Scroll through the generated SOAP note
+3. Show the Subjective/Objective/Assessment/Plan sections
+4. Click **Approve & Save to EHR**
+5. *(Show confirmation toast)*
+
+---
+
+### Act 9: Closing (10 seconds)
 **[NARRATION]**
-> "With MedGemma Clinical Assistant, physicians can focus on patients 
-> while AI handles documentation and ensures nothing is missed."
+> "With MedGemma Clinical Assistant, physicians get real-time AI reasoning,
+> live PubMed evidence, and multi-opinion consensus — all while keeping
+> documentation automatic and the doctor in control."
 
 ---
 
 ## 🎯 Key Points to Emphasize
 
-1. **Real-time transcription** - Show words appearing as you speak
-2. **Multimodal understanding** - Image + voice + EHR context
-3. **Missed diagnosis detection** - The AI catches what might be overlooked
-4. **Human-in-the-loop** - Doctor approval required before EHR update
-5. **Time savings** - Documentation generated automatically
+1. **Real-time transcription** — Show words appearing as you speak
+2. **Multimodal understanding** — Image + voice + EHR context
+3. **Missed diagnosis detection** — The AI catches what might be overlooked
+4. **Live PubMed grounding** — Rare diagnoses backed by actual citations
+5. **Multi-opinion consensus** — Diagnostic Council with 5 independent analyses
+6. **Human-in-the-loop** — Doctor approval required before EHR update
+7. **Time savings** — Documentation generated automatically
 
 ---
 
@@ -122,18 +145,32 @@ Click **Stop Recording**
 Former smoker, history of asthma and hypertension.
 Vitals stable, SpO2 96 percent.
 Exam shows bilateral expiratory wheezing.
-Reviewing the chest X-ray - there are increased interstitial markings 
+Reviewing the chest X-ray — there are increased interstitial markings
 in the right lower lobe that I want to investigate further.
 ```
 
 ### Emergency Scenario (for demo impact)
 ```
-65-year-old male presenting with acute onset chest pain and shortness 
-of breath for the past two hours. Pain is substernal, radiating to the 
+65-year-old male presenting with acute onset chest pain and shortness
+of breath for the past two hours. Pain is substernal, radiating to the
 left arm. He has a history of diabetes and coronary artery disease.
 Vitals show elevated heart rate at 110, blood pressure 160 over 95.
 The chest X-ray shows... [AI should flag potential cardiac emergency]
 ```
+
+---
+
+## Feature Demo Sequence (Quick Reference)
+
+| Feature | Page | What to Show |
+|---------|------|--------------|
+| Patient EHR | Home | Patient list → click patient → EHR loads |
+| Dictation + SOAP | Home | Record → Generate SOAP → See missed diagnoses |
+| PubMed in Encounter | Home | 📚 PubMed Literature card auto-appears post-SOAP |
+| Diagnostic Council | /council | Enter symptoms → 5 opinions → PubMed Zebra Hunt |
+| AI Chat Portal | /ai-portal | Select patient → annotate image → chat → Evidence Check |
+| Compliance | /compliance | Run check → see flags and rates |
+| Patient Portal | /patient-portal | Ask question → emergency detection demo |
 
 ---
 
@@ -160,10 +197,12 @@ The chest X-ray shows... [AI should flag potential cardiac emergency]
 ## Sample Intro/Outro
 
 **Intro:**
-> "Every day, physicians spend over 2 hours on documentation. 
-> Meanwhile, diagnostic errors affect 12 million Americans annually. 
-> What if AI could help with both?"
+> "Every day, physicians spend over 2 hours on documentation.
+> Meanwhile, diagnostic errors affect 12 million Americans annually.
+> What if AI could help with both — and back every suggestion with
+> real evidence from medical literature?"
 
 **Outro:**
-> "MedGemma Clinical Assistant: Helping doctors focus on what matters - 
-> their patients. Built with Google's Health AI Developer Foundations."
+> "MedGemma Clinical Assistant: Real-time AI reasoning, live PubMed evidence,
+> multi-opinion consensus — helping doctors focus on what matters most: their patients.
+> Built with Google's Health AI Developer Foundations."

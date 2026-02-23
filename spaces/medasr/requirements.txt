@@ -1,0 +1,4 @@
+transformers>=5.0.0
+torch
+soundfile
+gradio>=4.44.0

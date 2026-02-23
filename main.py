@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -22,6 +22,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.ehr import get_fhir_server
 from src.soap import SOAPGenerator, SOAPNote, EnhancedSOAPNote
+from src.treatment import get_treatment_service
+from src.monitoring import get_discharge_monitor
+from src.auth.prior_auth import get_prior_auth_service
+from src.pubmed import get_synthesis_agent
 
 # Configure logging
 logging.basicConfig(
@@ -35,7 +39,13 @@ agent = None
 asr = None
 fhir_server = None
 soap_generator = None
-vllm_manager = None  # VLLMModelManager instance 
+vllm_manager = None  # VLLMModelManager instance
+
+# New services (initialised in lifespan once fhir_server is ready)
+treatment_service = None
+discharge_monitor = None
+prior_auth_service = None
+pubmed_agent = None
 
 # Store active sessions
 sessions: dict[str, dict] = {}
@@ -95,7 +105,7 @@ def load_models_lazy():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    global fhir_server, soap_generator
+    global fhir_server, soap_generator, treatment_service, discharge_monitor, prior_auth_service, pubmed_agent
     
     logger.info("Starting MedGemma Clinical Assistant...")
     
@@ -114,7 +124,14 @@ async def lifespan(app: FastAPI):
         fhir_server = get_fhir_server()
     
     soap_generator = SOAPGenerator()
-    
+
+    # Initialize new feature services (depend on fhir_server being ready)
+    treatment_service = get_treatment_service(fhir_server)
+    discharge_monitor = get_discharge_monitor(fhir_server)
+    prior_auth_service = get_prior_auth_service(fhir_server)
+    pubmed_agent = get_synthesis_agent()   # MedGemma reference injected later in load_models_lazy
+    logger.info("Treatment summary, discharge monitoring, prior auth, and PubMed synthesis services initialized")
+
     logger.info("FHIR server and SOAP generator initialized")
     
     # Load AI models at startup so they're ready for all endpoints
@@ -141,6 +158,105 @@ app = FastAPI(
 static_path = Path(__file__).parent / "static"
 if static_path.exists():
     app.mount("/static", StaticFiles(directory=static_path), name="static")
+
+
+# ── PubMed background task helper ─────────────────────────────────────────────
+
+def _run_pubmed_background(
+    session_id: str,
+    soap_note,
+    transcription: str,
+    patient_context: dict | None,
+) -> None:
+    """
+    Synchronous worker called via FastAPI BackgroundTasks after SOAP generation.
+    Runs all three PubMed synthesis modes and stores results in the session dict.
+    Called in a thread pool so it never blocks the event loop.
+    """
+    if session_id not in sessions:
+        return
+
+    try:
+        assessment = getattr(soap_note, "assessment", "") or ""
+        plan = getattr(soap_note, "plan", "") or ""
+
+        medications: list[str] = []
+        if patient_context and isinstance(patient_context, dict):
+            for m in patient_context.get("medications", []):
+                name = m.get("name", "") if isinstance(m, dict) else str(m)
+                if name:
+                    medications.append(name)
+
+        # Extract symptoms from transcription + subjective
+        subjective = getattr(soap_note, "subjective", "") or ""
+        combined_text = f"{transcription} {subjective}".lower()
+        symptom_vocab = [
+            "cough", "dyspnea", "shortness of breath", "wheezing", "chest pain",
+            "fever", "fatigue", "weight loss", "nausea", "vomiting", "headache",
+            "dizziness", "palpitations", "edema", "rash", "pain", "syncope",
+            "weakness", "numbness", "tingling", "abdominal pain",
+        ]
+        symptoms = [s for s in symptom_vocab if s in combined_text]
+
+        # Derive atypical markers: symptoms present but rare for the chief diagnosis
+        # Simple heuristic: short symptom list means presentation may be unusual
+        atypical = symptoms[3:] if len(symptoms) > 3 else []
+        common = symptoms[:3] if len(symptoms) >= 3 else symptoms
+
+        results: dict = {}
+
+        # Case Matcher
+        if symptoms:
+            try:
+                r = pubmed_agent.case_matcher(
+                    common_symptoms=common or symptoms,
+                    atypical_markers=atypical,
+                    max_results=4,
+                )
+                results["case_matcher"] = r.to_dict()
+            except Exception as e:
+                logger.warning("PubMed case_matcher failed: %s", e)
+                results["case_matcher"] = {"error": str(e)}
+
+        # EBM Validator
+        if assessment or plan:
+            try:
+                r = pubmed_agent.ebm_validator(
+                    assessment=assessment,
+                    plan=plan,
+                    max_results=4,
+                    date_years_back=2,
+                )
+                results["ebm_validator"] = r.to_dict()
+            except Exception as e:
+                logger.warning("PubMed ebm_validator failed: %s", e)
+                results["ebm_validator"] = {"error": str(e)}
+
+        # DDI Monitor (only if patient has ≥ 2 medications)
+        if len(medications) >= 2:
+            try:
+                r = pubmed_agent.ddi_monitor(
+                    current_medications=medications,
+                    max_results_per_pair=1,
+                    date_years_back=3,
+                )
+                results["ddi_monitor"] = r.to_dict()
+            except Exception as e:
+                logger.warning("PubMed ddi_monitor failed: %s", e)
+                results["ddi_monitor"] = {"error": str(e)}
+
+        sessions[session_id]["pubmed_insights"] = {
+            "status": "completed",
+            "results": results,
+        }
+        logger.info("PubMed analysis completed for session %s", session_id)
+
+    except Exception as e:
+        logger.error("PubMed background task failed for session %s: %s", session_id, e)
+        sessions[session_id]["pubmed_insights"] = {
+            "status": "error",
+            "error": str(e),
+        }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -265,11 +381,15 @@ async def update_transcription(
 
 
 @app.post("/api/encounters/{session_id}/generate-soap")
-async def generate_soap(session_id: str, chief_complaint: str = Form("")):
+async def generate_soap(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    chief_complaint: str = Form(""),
+):
     """Generate enhanced SOAP note with clinical intelligence."""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     session = sessions[session_id]
     load_models_lazy()
     
@@ -300,14 +420,30 @@ async def generate_soap(session_id: str, chief_complaint: str = Form("")):
                 raw_soap_text=result.get("soap_note")
             )
             session["soap_note"] = enhanced_soap
-            
+
+            # Extract clinical orders for HITL approval
+            pending_orders = soap_generator.extract_clinical_orders(enhanced_soap, transcription)
+            session["pending_orders"] = pending_orders
+
+            # Schedule PubMed literature analysis in background (non-blocking)
+            session["pubmed_insights"] = {"status": "running"}
+            background_tasks.add_task(
+                _run_pubmed_background,
+                session_id=session_id,
+                soap_note=enhanced_soap,
+                transcription=transcription,
+                patient_context=patient_context,
+            )
+
             return {
                 "status": "generated",
                 "soap": enhanced_soap.to_dict(),
                 "soap_html": enhanced_soap.to_html(),
                 "alerts": enhanced_soap.critical_alerts,
                 "drug_interactions": enhanced_soap.drug_interactions,
-                "differentials": enhanced_soap.differentials
+                "differentials": enhanced_soap.differentials,
+                "pending_orders": pending_orders,
+                "pubmed_insights_status": "running",
             }
         except Exception as e:
             import traceback
@@ -329,7 +465,21 @@ async def generate_soap(session_id: str, chief_complaint: str = Form("")):
         enhanced_soap.plan = "1. Review findings\n2. Order additional tests as needed\n3. Follow up in 2 weeks"
     
     session["soap_note"] = enhanced_soap
-    
+
+    # Extract clinical orders for HITL approval
+    pending_orders = soap_generator.extract_clinical_orders(enhanced_soap, transcription)
+    session["pending_orders"] = pending_orders
+
+    # Schedule PubMed literature analysis in background (non-blocking)
+    session["pubmed_insights"] = {"status": "running"}
+    background_tasks.add_task(
+        _run_pubmed_background,
+        session_id=session_id,
+        soap_note=enhanced_soap,
+        transcription=transcription,
+        patient_context=patient_context,
+    )
+
     return {
         "status": "generated",
         "soap": enhanced_soap.to_dict(),
@@ -337,6 +487,8 @@ async def generate_soap(session_id: str, chief_complaint: str = Form("")):
         "alerts": enhanced_soap.critical_alerts,
         "drug_interactions": enhanced_soap.drug_interactions,
         "differentials": enhanced_soap.differentials,
+        "pending_orders": pending_orders,
+        "pubmed_insights_status": "running",
         "simulated": True
     }
 
@@ -346,24 +498,63 @@ async def approve_soap(session_id: str):
     """Approve SOAP note and update EHR."""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     session = sessions[session_id]
-    
+
     if session.get("soap_note") is None:
         raise HTTPException(status_code=400, detail="No SOAP note to approve")
-    
+
     # Update EHR
     soap_note = session["soap_note"]
     result = fhir_server.update_patient_record(
         patient_id=session["patient_id"],
         encounter_note=soap_note.to_markdown()
     )
-    
+
     session["status"] = "completed"
-    
+
+    # ── Generate & store treatment summary ───────────────────────────────────
+    summary_data: dict = {}
+    try:
+        summary = treatment_service.generate_and_store(
+            patient_id=session["patient_id"],
+            session=session,
+        )
+        session["treatment_summary"] = summary.to_dict()
+        summary_data = summary.to_dict()
+        logger.info(f"Treatment summary {summary.summary_id} generated for patient {session['patient_id']}")
+    except Exception as e:
+        logger.warning(f"Treatment summary generation failed (non-fatal): {e}")
+
+    # ── Auto-detect prior auth requirements from pending orders ───────────────
+    pa_requests: list[dict] = []
+    try:
+        all_orders = session.get("pending_orders", {})
+        combined_orders = (
+            all_orders.get("lab_orders", [])
+            + all_orders.get("imaging_orders", [])
+            + all_orders.get("medications", [])
+            + all_orders.get("referrals", [])
+        )
+        if combined_orders:
+            indication = getattr(soap_note, "assessment", "") or ""
+            pa_list = prior_auth_service.detect_and_create(
+                patient_id=session["patient_id"],
+                encounter_id=session_id,
+                orders=combined_orders,
+                clinical_indication=indication,
+            )
+            pa_requests = [p.to_dict() for p in pa_list]
+            if pa_requests:
+                logger.info(f"Auto-created {len(pa_requests)} prior auth request(s) for encounter {session_id}")
+    except Exception as e:
+        logger.warning(f"Prior auth auto-detection failed (non-fatal): {e}")
+
     return {
         "status": "approved",
-        "ehr_update": result
+        "ehr_update": result,
+        "treatment_summary": summary_data,
+        "prior_auth_requests": pa_requests,
     }
 
 
@@ -607,7 +798,7 @@ async def council_deliberate(request: Request):
     num_rollouts = data.get("num_rollouts", 5)
     vitals = data.get("vitals")
     
-    council = get_diagnostic_council(agent=agent, num_rollouts=num_rollouts)
+    council = get_diagnostic_council(agent=agent, num_rollouts=num_rollouts, pubmed_agent=pubmed_agent)
     deliberation = council.deliberate(
         symptoms=symptoms,
         patient_history=patient_history,
@@ -622,7 +813,7 @@ async def council_deliberate(request: Request):
 async def get_council_history():
     """Get deliberation history."""
     from src.council import get_diagnostic_council
-    council = get_diagnostic_council(agent=agent)
+    council = get_diagnostic_council(agent=agent, pubmed_agent=pubmed_agent)
     return {"deliberations": council.get_deliberation_history()}
 
 
@@ -941,7 +1132,84 @@ async def ai_portal_chat(request: Request):
                 "clinical insights based on the patient context and your question."
             )
 
-    return {"response": response_text, "simulated": agent is None}
+    # ── Optional PubMed context enrichment ───────────────────────────────────
+    pubmed_context: dict | None = None
+    if pubmed_agent is not None:
+        try:
+            msg_lower = message.lower()
+
+            # Detect intent from message keywords
+            ddi_keywords   = {"interaction", "drug interaction", "drug-drug", "combine", "combining"}
+            ebm_keywords   = {"treatment", "guideline", "therapy", "efficacy", "evidence", "management",
+                              "recommend", "first-line", "second-line"}
+            zebra_keywords = {"diagnosis", "diagnose", "rare", "unusual", "zebra", "atypical",
+                              "differential", "rule out", "what could"}
+
+            is_ddi   = any(k in msg_lower for k in ddi_keywords)
+            is_ebm   = any(k in msg_lower for k in ebm_keywords)
+            is_zebra = any(k in msg_lower for k in zebra_keywords)
+
+            if is_ddi and patient_context and isinstance(patient_context, dict):
+                # Run DDI scan on the patient's medications
+                meds: list[str] = []
+                for m in patient_context.get("medications", []):
+                    name = m.get("name", "") if isinstance(m, dict) else str(m)
+                    if name:
+                        meds.append(name)
+                if len(meds) >= 2:
+                    res = pubmed_agent.ddi_monitor(
+                        current_medications=meds,
+                        max_results_per_pair=1,
+                        date_years_back=3,
+                    )
+                    pubmed_context = {
+                        "mode": "ddi_monitor",
+                        "summary": res.summary,
+                        "ddi_alerts": res.ddi_alerts,
+                        "key_findings": res.key_findings[:4],
+                        "citation_list": res.citation_list[:4],
+                    }
+            elif is_ebm:
+                # EBM: use the raw message as assessment proxy
+                res = pubmed_agent.ebm_validator(
+                    assessment=message[:300],
+                    plan="",
+                    max_results=3,
+                    date_years_back=2,
+                )
+                pubmed_context = {
+                    "mode": "ebm_validator",
+                    "summary": res.summary,
+                    "divergences": res.divergences,
+                    "key_findings": res.key_findings[:4],
+                    "citation_list": res.citation_list[:4],
+                }
+            elif is_zebra or (not is_ddi and not is_ebm):
+                # Case matcher: extract symptom-like words from the message
+                symptom_vocab = [
+                    "cough", "dyspnea", "shortness of breath", "wheezing", "chest pain",
+                    "fever", "fatigue", "weight loss", "nausea", "vomiting", "headache",
+                    "dizziness", "palpitations", "edema", "rash", "pain", "syncope",
+                    "weakness", "numbness", "tingling", "abdominal pain",
+                ]
+                found_symptoms = [s for s in symptom_vocab if s in msg_lower]
+                if found_symptoms:
+                    res = pubmed_agent.case_matcher(
+                        common_symptoms=found_symptoms[:3],
+                        atypical_markers=found_symptoms[3:],
+                        max_results=3,
+                    )
+                    pubmed_context = {
+                        "mode": "case_matcher",
+                        "summary": res.summary,
+                        "rare_diagnoses": res.rare_diagnoses,
+                        "key_findings": res.key_findings[:4],
+                        "citation_list": res.citation_list[:4],
+                    }
+        except Exception as _pm_e:
+            logger.debug("AI portal PubMed enrichment failed (non-fatal): %s", _pm_e)
+
+    return {"response": response_text, "simulated": agent is None, "pubmed_context": pubmed_context}
 
 
 @app.post("/api/ai-portal/transcribe")
@@ -973,9 +1241,469 @@ async def ai_portal_transcribe(audio: UploadFile = File(...)):
             pass
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Treatment Summary routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/patients/{patient_id}/treatment-summaries")
+async def get_treatment_summaries(patient_id: str):
+    """Return all treatment summaries for a patient (newest first)."""
+    summaries = treatment_service.get_summaries(patient_id)
+    return {"patient_id": patient_id, "summaries": summaries, "count": len(summaries)}
+
+
+@app.get("/api/encounters/{session_id}/treatment-summary")
+async def get_encounter_treatment_summary(session_id: str):
+    """Return the treatment summary generated for a specific encounter."""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    summary = sessions[session_id].get("treatment_summary")
+    if not summary:
+        raise HTTPException(status_code=404, detail="Treatment summary not available — has the encounter been approved?")
+    return summary
+
+
+@app.post("/api/treatment-cases/search")
+async def search_similar_cases(body: dict):
+    """
+    Search anonymised treatment cases similar to given diagnosis keywords.
+    Body: {"keywords": ["hypertension", "diabetes"], "max_results": 5}
+    """
+    keywords = body.get("keywords", [])
+    max_results = min(int(body.get("max_results", 5)), 20)
+    cases = treatment_service.find_similar_cases(keywords, max_results)
+    return {"cases": cases, "count": len(cases)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Lab order HITL approval routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/encounters/{session_id}/pending-orders")
+async def get_pending_orders(session_id: str):
+    """Return orders extracted from the SOAP note awaiting physician approval."""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "session_id": session_id,
+        "pending_orders": sessions[session_id].get("pending_orders", {}),
+    }
+
+
+@app.post("/api/encounters/{session_id}/orders/approve")
+async def approve_orders(session_id: str, body: dict):
+    """
+    Physician approves a subset of extracted orders.
+    Body: {"approved": {"lab_orders": [...], "imaging_orders": [...], "medications": [...]}}
+    Approved orders replace pending_orders in the session.
+    """
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    approved = body.get("approved", {})
+    sessions[session_id]["approved_orders"] = approved
+    sessions[session_id]["pending_orders"] = approved
+    return {"status": "orders_approved", "approved_orders": approved}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Post-discharge monitoring routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/patients/{patient_id}/discharge-plan")
+async def create_discharge_plan(patient_id: str, body: dict):
+    """
+    Physician creates a post-discharge monitoring plan.
+    Body: {
+      "encounter_id": "session_id",
+      "instructions": "...",
+      "monitor_days": 14,
+      "thresholds": { ... optional overrides ... },
+      "notify_on_warning": true,
+      "notify_on_critical": true
+    }
+    """
+    encounter_id = body.get("encounter_id", "")
+    instructions = body.get("instructions", "")
+    if not instructions:
+        raise HTTPException(status_code=400, detail="instructions is required")
+
+    plan = discharge_monitor.create_plan(
+        patient_id=patient_id,
+        encounter_id=encounter_id,
+        instructions=instructions,
+        monitor_days=int(body.get("monitor_days", 14)),
+        thresholds=body.get("thresholds"),
+        notify_on_warning=bool(body.get("notify_on_warning", True)),
+        notify_on_critical=bool(body.get("notify_on_critical", True)),
+    )
+    return {"status": "created", "plan": plan.to_dict()}
+
+
+@app.get("/api/patients/{patient_id}/discharge-plan")
+async def get_discharge_plan(patient_id: str):
+    """Return the active discharge monitoring plan for a patient."""
+    plan = discharge_monitor.get_active_plan(patient_id)
+    if plan is None:
+        return {"active_plan": None, "message": "No active discharge monitoring plan"}
+    return {"active_plan": plan}
+
+
+@app.post("/api/patients/{patient_id}/vitals")
+async def submit_vitals(patient_id: str, body: dict):
+    """
+    Patient submits vitals readings for post-discharge monitoring.
+    Body: {
+      "vitals": {"systolic_bp": 145, "heart_rate": 88, "oxygen_saturation": 95},
+      "notes": "Felt slightly dizzy this morning"
+    }
+    Returns immediate alert feedback.
+    """
+    vitals = body.get("vitals", {})
+    if not vitals:
+        raise HTTPException(status_code=400, detail="vitals object is required")
+
+    for k, v in list(vitals.items()):
+        try:
+            vitals[k] = float(v)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"Non-numeric value for {k}")
+
+    submission = discharge_monitor.submit_vitals(
+        patient_id=patient_id,
+        vitals=vitals,
+        notes=body.get("notes", ""),
+    )
+    return submission.to_dict()
+
+
+@app.get("/api/patients/{patient_id}/vitals")
+async def get_vitals_history(patient_id: str):
+    """Return all vitals submissions for a patient (newest first)."""
+    return {
+        "patient_id": patient_id,
+        "submissions": discharge_monitor.get_vitals_history(patient_id),
+    }
+
+
+@app.get("/api/patients/{patient_id}/discharge-alerts")
+async def get_discharge_alerts(patient_id: str):
+    """Return unresolved discharge alerts for care team review."""
+    return {
+        "patient_id": patient_id,
+        "alerts": discharge_monitor.get_pending_alerts(patient_id),
+    }
+
+
+@app.post("/api/patients/{patient_id}/discharge-alerts/{submission_id}/resolve")
+async def resolve_discharge_alert(patient_id: str, submission_id: str):
+    """Care team resolves a discharge alert."""
+    ok = discharge_monitor.resolve_alert(patient_id, submission_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"status": "resolved", "submission_id": submission_id}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Prior authorization routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/patients/{patient_id}/prior-auth")
+async def create_prior_auth(patient_id: str, body: dict):
+    """
+    Manually create a prior authorization request.
+    Body: {
+      "encounter_id": "...",
+      "service_type": "lab|imaging|medication|procedure|specialist_referral",
+      "service_description": "MRI brain with contrast",
+      "clinical_indication": "...",
+      "urgency": "routine|urgent|emergency",
+      "auto_submit": true
+    }
+    """
+    service_description = body.get("service_description", "")
+    clinical_indication = body.get("clinical_indication", "")
+    if not service_description or not clinical_indication:
+        raise HTTPException(status_code=400, detail="service_description and clinical_indication are required")
+
+    req = prior_auth_service.create(
+        patient_id=patient_id,
+        encounter_id=body.get("encounter_id", ""),
+        service_type=body.get("service_type", "procedure"),
+        service_description=service_description,
+        clinical_indication=clinical_indication,
+        urgency=body.get("urgency", "routine"),
+        auto_submit=bool(body.get("auto_submit", True)),
+    )
+    return {"status": "created", "prior_auth": req.to_dict()}
+
+
+@app.get("/api/patients/{patient_id}/prior-auth")
+async def list_prior_auths(patient_id: str, status: str | None = None):
+    """List prior authorization requests for a patient. Optional ?status=pending filter."""
+    if status == "pending":
+        requests = prior_auth_service.get_pending(patient_id)
+    else:
+        requests = prior_auth_service.get_all(patient_id)
+    return {"patient_id": patient_id, "requests": requests, "count": len(requests)}
+
+
+@app.get("/api/patients/{patient_id}/prior-auth/{auth_id}")
+async def get_prior_auth(patient_id: str, auth_id: str):
+    """Get a specific prior authorization request."""
+    req = prior_auth_service.get_by_id(patient_id, auth_id)
+    if req is None:
+        raise HTTPException(status_code=404, detail="Prior auth request not found")
+    return req
+
+
+@app.post("/api/patients/{patient_id}/prior-auth/{auth_id}/status")
+async def update_prior_auth_status(patient_id: str, auth_id: str, body: dict):
+    """
+    Update the status of a prior auth request.
+    Body: {
+      "action": "submit|approve|deny|pending|more_info",
+      "notes": "...",
+      "insurer_ref": "...",
+      "approved_by": "...",
+      "denial_reason": "...",
+    }
+    """
+    action = body.get("action", "").lower()
+    notes = body.get("notes", "")
+
+    action_map = {
+        "submit": lambda: prior_auth_service.submit(patient_id, auth_id, notes),
+        "pending": lambda: prior_auth_service.mark_pending(patient_id, auth_id, body.get("insurer_ref", ""), notes),
+        "approve": lambda: prior_auth_service.approve(patient_id, auth_id, body.get("approved_by", ""), notes),
+        "deny": lambda: prior_auth_service.deny(patient_id, auth_id, body.get("denial_reason", notes or "No reason provided"), notes),
+        "more_info": lambda: prior_auth_service.request_more_info(patient_id, auth_id, notes),
+    }
+
+    handler = action_map.get(action)
+    if handler is None:
+        raise HTTPException(status_code=400, detail=f"Unknown action: {action!r}. Use: submit|approve|deny|pending|more_info")
+
+    result = handler()
+    if result is None:
+        raise HTTPException(status_code=404, detail="Prior auth request not found")
+    return result
+
+
+@app.post("/api/patients/{patient_id}/prior-auth/{auth_id}/doc")
+async def add_prior_auth_doc(patient_id: str, auth_id: str, body: dict):
+    """Attach a supporting document (text) to a prior auth request. Body: {"doc_text": "..."}"""
+    doc_text = body.get("doc_text", "").strip()
+    if not doc_text:
+        raise HTTPException(status_code=400, detail="doc_text is required")
+    ok = prior_auth_service.add_supporting_doc(patient_id, auth_id, doc_text)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Prior auth request not found")
+    return {"status": "added"}
+
+
+@app.get("/api/encounters/{session_id}/prior-auth")
+async def get_encounter_prior_auths(session_id: str):
+    """Return all prior auth requests linked to a specific encounter."""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    patient_id = sessions[session_id]["patient_id"]
+    requests = prior_auth_service.get_by_encounter(patient_id, session_id)
+    return {"session_id": session_id, "requests": requests, "count": len(requests)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PubMed synthesis routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/encounters/{session_id}/pubmed-insights")
+async def get_pubmed_insights(session_id: str):
+    """
+    Poll for the PubMed background analysis triggered after SOAP generation.
+    Returns status: 'running' | 'completed' | 'error' with results when done.
+    """
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    insights = sessions[session_id].get("pubmed_insights")
+    if insights is None:
+        return {"status": "not_started", "message": "Generate a SOAP note first to trigger PubMed analysis."}
+    return {"session_id": session_id, **insights}
+
+
+@app.post("/api/pubmed/search")
+async def pubmed_search(request: Request):
+    """
+    Direct PubMed search in one of three modes.
+
+    Body:
+      mode: 'case_matcher' | 'ebm_validator' | 'ddi_monitor'
+      --- case_matcher ---
+      symptoms: list[str]
+      atypical_markers: list[str]  (optional)
+      max_results: int             (default 5)
+      --- ebm_validator ---
+      assessment: str
+      plan: str
+      max_results: int
+      date_years_back: int         (default 2)
+      --- ddi_monitor ---
+      medications: list[str]
+      new_medications: list[str]   (optional)
+      max_results_per_pair: int    (default 2)
+      date_years_back: int         (default 3)
+    """
+    data = await request.json()
+    mode = data.get("mode", "")
+
+    if mode not in ("case_matcher", "ebm_validator", "ddi_monitor"):
+        raise HTTPException(
+            status_code=400,
+            detail="mode must be one of: case_matcher, ebm_validator, ddi_monitor"
+        )
+
+    try:
+        if mode == "case_matcher":
+            symptoms = data.get("symptoms", [])
+            if not symptoms:
+                raise HTTPException(status_code=400, detail="symptoms list is required for case_matcher")
+            result = pubmed_agent.case_matcher(
+                common_symptoms=symptoms,
+                atypical_markers=data.get("atypical_markers", []),
+                max_results=int(data.get("max_results", 5)),
+            )
+        elif mode == "ebm_validator":
+            assessment = data.get("assessment", "")
+            plan = data.get("plan", "")
+            if not assessment and not plan:
+                raise HTTPException(status_code=400, detail="assessment or plan is required for ebm_validator")
+            result = pubmed_agent.ebm_validator(
+                assessment=assessment,
+                plan=plan,
+                max_results=int(data.get("max_results", 5)),
+                date_years_back=int(data.get("date_years_back", 2)),
+            )
+        else:  # ddi_monitor
+            medications = data.get("medications", [])
+            if not medications:
+                raise HTTPException(status_code=400, detail="medications list is required for ddi_monitor")
+            result = pubmed_agent.ddi_monitor(
+                current_medications=medications,
+                new_medications=data.get("new_medications"),
+                max_results_per_pair=int(data.get("max_results_per_pair", 2)),
+                date_years_back=int(data.get("date_years_back", 3)),
+            )
+        return result.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"PubMed search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pubmed/zebra-hunt")
+async def pubmed_zebra_hunt(request: Request):
+    """
+    Zebra Hunt — find rare diagnoses matching an unusual symptom cluster.
+
+    Body:
+      common_symptoms: list[str]   e.g. ["cough", "fatigue"]
+      atypical_markers: list[str]  e.g. ["tongue discoloration", "night sweats"]
+      patient_age: int             (optional)
+      patient_gender: str          (optional, "male"/"female")
+      max_results: int             (default 5)
+    """
+    data = await request.json()
+    common = data.get("common_symptoms", [])
+    atypical = data.get("atypical_markers", [])
+    if not common and not atypical:
+        raise HTTPException(status_code=400, detail="common_symptoms or atypical_markers required")
+    try:
+        result = pubmed_agent.case_matcher(
+            common_symptoms=common,
+            atypical_markers=atypical,
+            patient_age=data.get("patient_age"),
+            patient_gender=data.get("patient_gender"),
+            max_results=int(data.get("max_results", 5)),
+        )
+        return result.to_dict()
+    except Exception as e:
+        logger.error(f"Zebra hunt failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pubmed/validate-plan")
+async def pubmed_validate_plan(request: Request):
+    """
+    EBM Validator — cross-check a physician's plan against recent guidelines.
+
+    Body:
+      assessment: str              SOAP Assessment section text
+      plan: str                    SOAP Plan section text
+      max_results: int             (default 5)
+      date_years_back: int         (default 2)
+    """
+    data = await request.json()
+    assessment = data.get("assessment", "")
+    plan = data.get("plan", "")
+    if not assessment and not plan:
+        raise HTTPException(status_code=400, detail="assessment or plan is required")
+    try:
+        result = pubmed_agent.ebm_validator(
+            assessment=assessment,
+            plan=plan,
+            max_results=int(data.get("max_results", 5)),
+            date_years_back=int(data.get("date_years_back", 2)),
+        )
+        return result.to_dict()
+    except Exception as e:
+        logger.error(f"EBM validation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/pubmed/ddi-monitor/{patient_id}")
+async def pubmed_ddi_monitor(
+    patient_id: str,
+    new_med: str | None = None,
+    date_years_back: int = 3,
+):
+    """
+    DDI Monitor — scan PubMed for novel drug-drug interactions for a patient.
+
+    Query params:
+      new_med:          Optional new medication being added (triggers priority scan)
+      date_years_back:  Recency window (default 3 years)
+    """
+    patient_summary = fhir_server.get_patient_summary(patient_id)
+    if patient_summary is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    medications: list[str] = []
+    for m in patient_summary.get("medications", []):
+        name = m.get("name", "") if isinstance(m, dict) else str(m)
+        if name:
+            medications.append(name)
+
+    if len(medications) < 2 and not new_med:
+        return {
+            "patient_id": patient_id,
+            "message": "Patient has fewer than 2 medications — DDI scan skipped.",
+            "medications": medications,
+        }
+
+    new_meds = [new_med] if new_med else None
+    try:
+        result = pubmed_agent.ddi_monitor(
+            current_medications=medications,
+            new_medications=new_meds,
+            max_results_per_pair=2,
+            date_years_back=date_years_back,
+        )
+        return {"patient_id": patient_id, "medications_scanned": medications, **result.to_dict()}
+    except Exception as e:
+        logger.error(f"DDI monitor failed for {patient_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
-    import argparse
-    import uvicorn
     
     parser = argparse.ArgumentParser(description="MedGemma Clinical Assistant")
     parser.add_argument("--use-vllm", action="store_true", help="Use vLLM backend for faster inference")

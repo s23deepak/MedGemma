@@ -34,6 +34,23 @@ Update patient electronic health record.
 - **Requires**: Physician approval before execution
 - **Output**: Confirmation of record update
 
+### search_pubmed
+Query PubMed via NCBI E-utils in one of three clinical synthesis modes.
+- **Input**: `mode` (enum: "case_matcher" | "ebm_validator" | "ddi_monitor"), plus mode-specific fields:
+  - *case_matcher*: `symptoms` (list), `atypical_markers` (list, optional), `max_results` (int)
+  - *ebm_validator*: `assessment` (str), `plan` (str), `max_results` (int), `date_years_back` (int)
+  - *ddi_monitor*: `medications` (list), `new_medications` (list, optional), `max_results_per_pair` (int), `date_years_back` (int)
+- **Output**: `PubMedSearchResult` with articles, summary, key_findings, and mode-specific fields:
+  - *case_matcher* → `rare_diagnoses` list
+  - *ebm_validator* → `divergences` list (plan vs. latest evidence)
+  - *ddi_monitor* → `ddi_alerts` list (novel interaction signals)
+- **Modes**:
+  - **Case Matcher (Zebra Hunt)**: Searches PubMed Case Reports for rare diagnoses matching unusual symptom clusters. Uses progressive query relaxation if no results — removes atypical markers one by one, then falls back to a broad "rare/unusual/atypical" filter.
+  - **EBM Validator**: Retrieves Systematic Reviews, Meta-analyses, and RCTs from the last N years to validate a physician's plan. Flags divergences where current evidence differs from the proposed treatment.
+  - **DDI Monitor**: Scans pharmacology literature for novel drug-drug interactions not yet captured in standard databases. Prioritizes pairs containing newly added medications. Caps at 12 drug pairs to respect NCBI rate limits.
+- **Rate limiting**: 3 req/s by default; set `NCBI_API_KEY` env var for 10 req/s
+- **Non-blocking**: After SOAP generation, PubMed analysis runs as a FastAPI `BackgroundTask` and can be polled via `GET /api/encounters/{session_id}/pubmed-insights`
+
 ## Safety Constraints
 
 1. **Never diagnose autonomously** - All findings are suggestions requiring physician validation

@@ -41,26 +41,37 @@
   ┌───────────────────────────────────────────┐
   │          Enhanced SOAP Note               │
   │  S: Subjective  │ O: Objective            │
-  │  A: Assessment   │ P: Plan                │
+  │  A: Assessment  │ P: Plan                 │
   │  + ICD-10 codes, confidence, alerts       │
   │  + Incidental vs correlated findings      │
   └───────────────────┬───────────────────────┘
                       │
-          ┌───────────┼───────────┐
-          ▼           ▼           ▼
-  ┌──────────┐ ┌───────────┐ ┌───────────┐
-  │Diagnostic│ │ SOAP      │ │ Physician │
-  │ Council  │ │ Compliance│ │ Approval  │
-  │          │ │           │ │           │
-  │ 5 Opins  │ │ Symptom   │ │ Approve   │
-  │ Consensus│ │ Flags     │ │ or Edit   │
-  └──────────┘ └───────────┘ └─────┬─────┘
-                                   │
-                                   ▼
-                            ┌────────────┐
-                            │ Update EHR │
-                            │ Save Mem0  │
-                            └────────────┘
+          ┌───────────┼─────────────────────┐
+          ▼           ▼                     ▼
+  ┌──────────┐ ┌───────────┐       ┌──────────────────┐
+  │Diagnostic│ │ SOAP      │       │ PubMed           │
+  │ Council  │ │ Compliance│       │ Synthesis Agent  │
+  │          │ │           │       │ (BackgroundTask) │
+  │ 3–7 Ops  │ │ Symptom   │       │                  │
+  │ Consensus│ │ Flags     │       │ case_matcher     │
+  │ + PubMed │ └───────────┘       │ ebm_validator    │
+  │ ZebraHunt│                     │ ddi_monitor      │
+  └──────────┘                     └────────┬─────────┘
+                                            │
+                      ┌─────────────────────┘
+                      ▼
+  ┌───────────────────────────────────────────┐
+  │          Physician Approval UI            │
+  │  • SOAP Note review                       │
+  │  • PubMed literature panel (polled)       │
+  │  • Approve or Edit                        │
+  └───────────────────┬───────────────────────┘
+                      │
+                      ▼
+               ┌────────────┐
+               │ Update EHR │
+               │ Save Mem0  │
+               └────────────┘
 ```
 
 ---
@@ -115,7 +126,7 @@
      ▼               ▼
 ┌──────────┐   ┌──────────────┐
 │ Artifact │   │ Finding      │
-│ Detection│   │ Classifcation│
+│ Detection│   │ Classification│
 └────┬─────┘   └──────┬───────┘
      │                │
      ▼                ▼
@@ -139,7 +150,7 @@
 
 ---
 
-## 4. Registered Tools (9 total)
+## 4. Registered Tools (10 total)
 
 ```
   ┌─────────────────────────────────────────────┐
@@ -149,17 +160,70 @@
   ┌──────────────────┼──────────────────────────┐
   │                  │                          │
   ▼                  ▼                          ▼
-  EHR Tools        Action Tools          Memory Tools
-  ──────────       ────────────          ────────────
+  EHR Tools        Action Tools          Memory / Research Tools
+  ──────────       ────────────          ─────────────────────────
   fetch_ehr        schedule_appt        recall_memory
   update_ehr       order_lab_tests      save_memory
-  check_drug_ix    notify_care_team
+  check_drug_ix    notify_care_team     search_pubmed
   get_prior_img
 ```
 
 ---
 
-## 5. Diagnostic Council
+## 5. PubMed Synthesis Flow
+
+```
+  ┌─────────────────────────────────────────────────────┐
+  │                    Trigger Sources                  │
+  │  1) SOAP generation → BackgroundTask                │
+  │  2) /api/council/deliberate → sync call             │
+  │  3) /api/ai-portal/chat → intent-based sync call    │
+  │  4) Direct /api/pubmed/* endpoints                  │
+  └─────────────────────────┬───────────────────────────┘
+                            │
+                   ┌────────▼────────┐
+                   │   Mode Select   │
+                   └──┬──────┬───┬───┘
+                      │      │   │
+              case_  │  ebm_ │   │ ddi_
+              matcher│  valid│   │ monitor
+                      ▼      ▼   ▼
+         ┌───────────────────────────────────────┐
+         │          NCBI E-utils API             │
+         │  esearch → efetch → parse XML         │
+         │  Rate: 3 req/s (10 with API key)      │
+         └───────────────┬───────────────────────┘
+                         │
+                ┌────────▼────────┐
+                │  MedGemma 4B    │
+                │  Synthesize     │
+                │  results into   │
+                │  summary +      │
+                │  mode output    │
+                └────────┬────────┘
+                         │
+              ┌──────────┴──────────────┐
+              │  PubMedSearchResult     │
+              │  • summary              │
+              │  • key_findings         │
+              │  • citation_list        │
+              │  • mode-specific:       │
+              │    rare_diagnoses /     │
+              │    divergences /        │
+              │    ddi_alerts           │
+              └──────────┬──────────────┘
+                         │
+         ┌───────────────┼───────────────┐
+         ▼               ▼               ▼
+  Encounter UI     Council Panel    AI Chat Panel
+  (polled every    (rendered        (inline below
+   3.5s until      after deliber-   assistant
+   complete)       ation)           message)
+```
+
+---
+
+## 6. Diagnostic Council
 
 ```
   ┌──────────────────────────────────────────┐
@@ -180,12 +244,22 @@
           │ MODERATE  60-80%│
           │ WEAK      40-60%│
           │ SPLIT     <40%  │
+          └────────┬────────┘
+                   │
+                   ▼
+          ┌─────────────────┐
+          │ PubMed Zebra    │
+          │ Hunt (auto)     │
+          │                 │
+          │ case_matcher on │
+          │ symptoms →      │
+          │ rare_diagnoses  │
           └─────────────────┘
 ```
 
 ---
 
-## 6. Patient Portal Safety
+## 7. Patient Portal Safety
 
 ```
   ┌──────────────────┐
@@ -221,52 +295,91 @@
 
 ---
 
-## 7. Request Sequence
+## 8. AI Chat Portal Flow
 
 ```
-  Physician        Web UI         FunctionGemma     MedGemma       EHR        Mem0
-     │                │                │               │            │           │
-     │──Start────────►│                │               │            │           │
-     │  encounter     │──Recall───────────────────────────────────────────────►│
-     │                │◄─Past encounters──────────────────────────────────────│
-     │                │──Route query──►│               │            │           │
-     │                │                │               │            │           │
-     │          ┌─────┼────────────────┼───────────────┼────────────┼───┐       │
-     │          │ ALT │ Simple action  │               │            │   │       │
-     │          │     │                │──Execute─────────────────►│   │       │
-     │          │     │◄───────────────┼──Result───────────────────│   │       │
-     │          ├─────┼────────────────┼───────────────┼────────────┼───┤       │
-     │          │     │ Medical query  │               │            │   │       │
-     │          │     │                │──Escalate───►│            │   │       │
-     │          │     │                │              ││ Analyze    │   │       │
-     │          │     │                │              ││ Correlate  │   │       │
-     │          │     │                │              ││ ICD-10     │   │       │
-     │          │     │◄───────────────┼──SOAP note──│            │   │       │
-     │          └─────┼────────────────┼───────────────┼────────────┼───┘       │
-     │                │                │               │            │           │
-     │◄──Display──────│                │               │            │           │
-     │──Approve──────►│                │               │            │           │
-     │                │──Update EHR──────────────────────────────►│           │
-     │                │──Save encounter───────────────────────────────────────►│
-     │                │                │               │            │           │
+  Physician
+     │
+     │  (select patient or enter manual context)
+     │  (optionally upload image + draw annotation boxes)
+     │  (type or dictate message)
+     ▼
+  ┌───────────────────────────────────────────┐
+  │          /api/ai-portal/chat              │
+  │                                           │
+  │  1. Assemble context (patient + image +   │
+  │     annotations + conversation history)  │
+  │  2. Call MedGemma (process_query)         │
+  │  3. Intent detection on user message      │
+  │     • ddi_keywords  → ddi_monitor         │
+  │     • ebm_keywords  → ebm_validator       │
+  │     • zebra_keywords → case_matcher       │
+  │  4. Run PubMed synthesis (if intent match)│
+  │  5. Return response + pubmed_context      │
+  └───────────────────────────────────────────┘
+     │
+     ▼
+  Chat Panel renders:
+  • MedGemma response bubble (markdown)
+  • PubMed collapsible pill (if enrichment ran)
+    └─ summary + rare_diagnoses / divergences
+       / ddi_alerts + key findings + citations
 ```
 
 ---
 
-## 8. Component Summary
+## 9. Request Sequence
+
+```
+  Physician        Web UI         FunctionGemma     MedGemma       EHR        Mem0       PubMed
+     │                │                │               │            │           │           │
+     │──Start────────►│                │               │            │           │           │
+     │  encounter     │──Recall───────────────────────────────────────────────►│           │
+     │                │◄─Past encounters──────────────────────────────────────│           │
+     │                │──Route query──►│               │            │           │           │
+     │                │                │               │            │           │           │
+     │          ┌─────┼────────────────┼───────────────┼────────────┼───┐       │           │
+     │          │ ALT │ Simple action  │               │            │   │       │           │
+     │          │     │                │──Execute─────────────────►│   │       │           │
+     │          │     │◄───────────────┼──Result───────────────────│   │       │           │
+     │          ├─────┼────────────────┼───────────────┼────────────┼───┤       │           │
+     │          │     │ Medical query  │               │            │   │       │           │
+     │          │     │                │──Escalate───►│            │   │       │           │
+     │          │     │                │              ││ Analyze    │   │       │           │
+     │          │     │                │              ││ Correlate  │   │       │           │
+     │          │     │                │              ││ ICD-10     │   │       │           │
+     │          │     │◄───────────────┼──SOAP note──│            │   │       │           │
+     │          └─────┼────────────────┼───────────────┼────────────┼───┘       │           │
+     │                │                │               │            │           │           │
+     │◄──Display──────│                │               │            │           │           │
+     │                │──PubMed bg task (async)────────────────────────────────────────────►│
+     │                │  (case_matcher + ebm_validator + ddi_monitor)                       │
+     │                │◄─Poll /pubmed-insights─────────────────────────────────────────────│
+     │◄──PubMed panel─│                │               │            │           │           │
+     │──Approve──────►│                │               │            │           │           │
+     │                │──Update EHR──────────────────────────────►│           │           │
+     │                │──Save encounter───────────────────────────────────────►│           │
+     │                │                │               │            │           │           │
+```
+
+---
+
+## 10. Component Summary
 
 | Layer | Component | Technology | Purpose |
 |-------|-----------|------------|---------|
-| Auth | Role-Based Access | Password + 4 Roles | Doctor, Nurse, Admin, Patient |
+| Auth | Role-Based Access | Password + 5 Roles | Doctor, Nurse, Resident, Admin, Patient |
 | Routing | FunctionGemma | Gemma 3 270M | Tool selection and workflows |
 | Reasoning | MedGemma | 4B multimodal | Medical analysis and SOAP |
 | Correlation | Clinical Correlator | Rule-based | Artifact detection, incidental vs correlated |
 | Intelligence | Clinical Intel | Rule-based | ICD-10, drug interactions, alerts |
-| Council | Diagnostic Council | Multi-rollout | 5 opinions + consensus |
+| Council | Diagnostic Council | Multi-rollout | 3–7 opinions + consensus + PubMed |
+| PubMed | Synthesis Agent | NCBI E-utils + LLM | Case matching, EBM validation, DDI monitoring |
+| AI Chat | AI Portal | MedGemma + Canvas | Multimodal physician chat with annotations |
 | Compliance | SOAP Checker | Rule-based | Symptom flags, documentation rates |
 | Portal | Patient Assistant | NLP + Rules | Emergency detection, guardrails |
 | Memory | Mem0 | LLM + Vector DB | Persistent cross-encounter memory |
 | History | History Service | FHIR queries | Timeline, medications, imaging |
 | EHR | FHIR Server | Mock / Real | Patient data storage |
-| Frontend | FastAPI + JS | WebSocket + REST | Real-time UI, 4 feature pages |
+| Frontend | FastAPI + JS | WebSocket + REST | Real-time UI, 6 feature pages |
 | Testing | pytest | 72 tests | Full coverage, no GPU needed |
