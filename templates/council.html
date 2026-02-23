@@ -343,6 +343,16 @@
                         <h2>💬 Discussion Summary</h2>
                         <div id="discussionContent" class="discussion-content"></div>
                     </div>
+
+                    <!-- PubMed Zebra-Hunt panel (populated by JS if pubmed_insights returned) -->
+                    <div id="pubmedInsightsSection" style="display:none; margin-top:1.5rem;
+                         background:var(--card-bg,#fff); border:1px solid #c7d2fe;
+                         border-radius:12px; padding:1.25rem;">
+                        <h2 style="font-size:1.05rem; font-weight:700; color:#4338ca; margin:0 0 0.75rem;">
+                            📚 PubMed — Zebra Hunt Results
+                        </h2>
+                        <div id="pubmedInsightsContent"></div>
+                    </div>
                 </div>
             </section>
         </main>
@@ -482,6 +492,60 @@
                 }).join('');
 
                 document.getElementById('discussionContent').innerHTML = data.discussion_summary.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+
+                // ── PubMed Zebra-Hunt results ─────────────────────────────────────
+                const pm = data.pubmed_insights;
+                if (pm && pm.status === 'completed') {
+                    document.getElementById('pubmedInsightsSection').style.display = 'block';
+                    document.getElementById('pubmedInsightsContent').innerHTML = renderPubmedInsightsCouncil(pm);
+                } else {
+                    document.getElementById('pubmedInsightsSection').style.display = 'none';
+                }
+            }
+
+            function renderPubmedInsightsCouncil(pm) {
+                let html = '';
+
+                if (pm.summary) {
+                    html += `<p style="margin:0 0 0.75rem; color:#374151; font-size:0.88rem;">${pm.summary}</p>`;
+                }
+
+                if (pm.rare_diagnoses && pm.rare_diagnoses.length > 0) {
+                    html += `<div style="margin-bottom:0.75rem;">
+                        <strong style="font-size:0.82rem; color:#4338ca;">Rare / Atypical Diagnoses to Consider:</strong>
+                        <ul style="margin:0.35rem 0 0 1.1rem; padding:0; font-size:0.85rem; color:#374151;">
+                            ${pm.rare_diagnoses.map(d => `<li>${d}</li>`).join('')}
+                        </ul>
+                    </div>`;
+                }
+
+                if (pm.key_findings && pm.key_findings.length > 0) {
+                    html += `<details style="margin-bottom:0.6rem;">
+                        <summary style="cursor:pointer; font-size:0.82rem; font-weight:600; color:#4338ca; user-select:none;">
+                            Key Findings (${pm.key_findings.length})
+                        </summary>
+                        <ul style="margin:0.4rem 0 0 1.1rem; padding:0; font-size:0.82rem; color:#374151;">
+                            ${pm.key_findings.map(f => `<li style="margin-bottom:0.25rem;">${f}</li>`).join('')}
+                        </ul>
+                    </details>`;
+                }
+
+                if (pm.citation_list && pm.citation_list.length > 0) {
+                    html += `<details>
+                        <summary style="cursor:pointer; font-size:0.82rem; font-weight:600; color:#4338ca; user-select:none;">
+                            Citations (${pm.citation_list.length} articles)
+                        </summary>
+                        <ol style="margin:0.4rem 0 0 1.1rem; padding:0; font-size:0.78rem; color:#6b7280;">
+                            ${pm.citation_list.map(c => `<li style="margin-bottom:0.2rem;">${c}</li>`).join('')}
+                        </ol>
+                    </details>`;
+                }
+
+                if (!html) {
+                    html = `<p style="font-size:0.85rem; color:#6b7280;">No rare diagnoses flagged by literature search.</p>`;
+                }
+
+                return html;
             }
         </script>
 </body>

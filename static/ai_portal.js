@@ -32,10 +32,12 @@ const portalState = {
     // Chat-attached image (separate from center-panel image)
     chatAttachedImage: null,    // {dataUrl, name, modality, annotations}
 
-    // Audio
+    // Audio — Web Audio API approach (records 16kHz mono WAV; no WebM/Opus)
     audioContext: null,
-    mediaRecorder: null,
-    audioChunks: [],
+    audioSource: null,          // MediaStreamAudioSourceNode
+    audioProcessor: null,       // ScriptProcessorNode
+    audioStream: null,          // MediaStream (to stop tracks)
+    pcmChunks: [],              // Float32Array chunks collected during recording
     manualRecording: false,
     chatRecording: false,
     activeRecordTarget: null,   // 'manual' | 'chat'
@@ -564,7 +566,8 @@ async function sendMessage() {
 
         const assistantMsg = {
             role: 'assistant',
-            content: data.response || '(No response)'
+            content: data.response || '(No response)',
+            pubmedContext: data.pubmed_context || null,
         };
         portalState.chatHistory.push(assistantMsg);
         renderMessage(assistantMsg);
@@ -652,10 +655,17 @@ function renderMessage(msg) {
         extra += `<span class="msg-annotation-badge">📐 ${msg.annotations.length} region(s) annotated</span>`;
     }
 
+    // PubMed context panel (assistant messages only)
+    let pubmedHtml = '';
+    if (msg.role === 'assistant' && msg.pubmedContext) {
+        pubmedHtml = renderPubmedContextInline(msg.pubmedContext);
+    }
+
     div.innerHTML = `
         <span class="msg-role">${roleLabel}</span>
         <div class="${bubbleClass}">${bubbleContent}</div>
         ${extra}
+        ${pubmedHtml}
     `;
 
     container.appendChild(div);
@@ -731,15 +741,27 @@ async function toggleChatRecording() {
 
 async function startRecording(target) {
     try {
+        const SAMPLE_RATE = 16000;
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        portalState.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        portalState.mediaRecorder = new MediaRecorder(stream);
-        portalState.audioChunks = [];
-        portalState.activeRecordTarget = target;
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+        const source = audioCtx.createMediaStreamSource(stream);
+        // ScriptProcessor captures raw float32 PCM; deprecated but universally supported
+        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
 
-        portalState.mediaRecorder.ondataavailable = e => portalState.audioChunks.push(e.data);
-        portalState.mediaRecorder.onstop = () => handleRecordingStop(target, stream);
-        portalState.mediaRecorder.start();
+        processor.onaudioprocess = e => {
+            // Copy — buffer is reused after the event
+            portalState.pcmChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+        };
+
+        source.connect(processor);
+        processor.connect(audioCtx.destination);
+
+        portalState.audioContext  = audioCtx;
+        portalState.audioSource   = source;
+        portalState.audioProcessor = processor;
+        portalState.audioStream   = stream;
+        portalState.pcmChunks     = [];
+        portalState.activeRecordTarget = target;
 
         if (target === 'manual') {
             portalState.manualRecording = true;
@@ -756,9 +778,24 @@ async function startRecording(target) {
 }
 
 function stopRecording(target) {
-    if (portalState.mediaRecorder && portalState.mediaRecorder.state !== 'inactive') {
-        portalState.mediaRecorder.stop();
-    }
+    if (!portalState.audioProcessor) return;
+
+    // Snapshot PCM data before teardown
+    const pcmChunks  = portalState.pcmChunks.slice();
+    const sampleRate = portalState.audioContext ? portalState.audioContext.sampleRate : 16000;
+
+    // Tear down Web Audio pipeline
+    portalState.audioProcessor.disconnect();
+    portalState.audioSource.disconnect();
+    if (portalState.audioStream) portalState.audioStream.getTracks().forEach(t => t.stop());
+    if (portalState.audioContext) portalState.audioContext.close();
+
+    portalState.audioProcessor = null;
+    portalState.audioSource    = null;
+    portalState.audioStream    = null;
+    portalState.audioContext   = null;
+    portalState.pcmChunks      = [];
+
     if (target === 'manual') {
         portalState.manualRecording = false;
         document.getElementById('manualRecordBtn').classList.remove('recording');
@@ -768,22 +805,61 @@ function stopRecording(target) {
         document.getElementById('chatRecordBtn').classList.remove('recording');
         document.getElementById('chatRecIndicator').classList.add('hidden');
     }
+
+    // Build WAV and upload (async, intentionally not awaited to unblock UI)
+    handleRecordingStop(target, pcmChunks, sampleRate);
 }
 
-async function handleRecordingStop(target, stream) {
-    stream.getTracks().forEach(t => t.stop());
+/**
+ * Encode an array of Float32Array PCM chunks into a 16-bit mono WAV Blob.
+ * Uses no external libraries — all stdlib browser APIs.
+ */
+function buildWavBlob(pcmChunks, sampleRate) {
+    // Merge chunks
+    const totalLen = pcmChunks.reduce((s, c) => s + c.length, 0);
+    const merged   = new Float32Array(totalLen);
+    let offset = 0;
+    for (const chunk of pcmChunks) { merged.set(chunk, offset); offset += chunk.length; }
 
-    const blob = new Blob(portalState.audioChunks, { type: 'audio/webm' });
+    // Float32 → Int16
+    const pcm16 = new Int16Array(merged.length);
+    for (let i = 0; i < merged.length; i++) {
+        const s = Math.max(-1, Math.min(1, merged[i]));
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+
+    // WAV container (44-byte header + PCM data)
+    const dataLen = pcm16.byteLength;
+    const buf     = new ArrayBuffer(44 + dataLen);
+    const v       = new DataView(buf);
+    const str4    = (off, s) => { for (let i = 0; i < 4; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+
+    str4(0,  'RIFF');  v.setUint32( 4, 36 + dataLen, true);
+    str4(8,  'WAVE');
+    str4(12, 'fmt ');  v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true);                       // PCM
+    v.setUint16(22, 1, true);                       // mono
+    v.setUint32(24, sampleRate, true);
+    v.setUint32(28, sampleRate * 2, true);           // byte rate
+    v.setUint16(32, 2, true);                       // block align
+    v.setUint16(34, 16, true);                      // bits per sample
+    str4(36, 'data');  v.setUint32(40, dataLen, true);
+    new Int16Array(buf, 44).set(pcm16);
+
+    return new Blob([buf], { type: 'audio/wav' });
+}
+
+async function handleRecordingStop(target, pcmChunks, sampleRate) {
+    if (!pcmChunks.length) return;
+
+    const blob     = buildWavBlob(pcmChunks, sampleRate);
     const formData = new FormData();
-    formData.append('audio', blob, 'recording.webm');
+    formData.append('audio', blob, 'recording.wav');
 
     showToast('Transcribing…');
 
     try {
-        const res = await fetch('/api/ai-portal/transcribe', {
-            method: 'POST',
-            body: formData,
-        });
+        const res  = await fetch('/api/ai-portal/transcribe', { method: 'POST', body: formData });
         const data = await res.json();
         const text = data.text || '';
 
@@ -834,4 +910,71 @@ function showToast(message, type = 'info') {
     toast.textContent = message;
     container.appendChild(toast);
     setTimeout(() => toast.remove(), 3000);
+}
+
+// ── PubMed inline context renderer (AI-Chat Portal) ──────────────────────────
+
+function renderPubmedContextInline(ctx) {
+    if (!ctx) return '';
+
+    const modeLabels = {
+        case_matcher:  { icon: '🦓', title: 'Rare Diagnosis Hints' },
+        ebm_validator: { icon: '📊', title: 'Evidence Check' },
+        ddi_monitor:   { icon: '💊', title: 'DDI Signals' },
+    };
+
+    const meta = modeLabels[ctx.mode] || { icon: '📚', title: 'PubMed' };
+    const uid  = Math.random().toString(36).slice(2, 8);
+
+    let inner = '';
+
+    if (ctx.summary) {
+        inner += `<p style="margin:0 0 0.4rem; line-height:1.45; font-size:0.8rem;">${ctx.summary}</p>`;
+    }
+
+    if (ctx.mode === 'case_matcher' && ctx.rare_diagnoses && ctx.rare_diagnoses.length > 0) {
+        inner += `<div style="font-size:0.78rem; font-weight:600; margin-bottom:0.2rem;">Rare diagnoses to consider:</div>
+        <ul style="margin:0 0 0.3rem 1.1rem; padding:0; font-size:0.78rem;">`;
+        ctx.rare_diagnoses.slice(0, 4).forEach(d => { inner += `<li>${d}</li>`; });
+        inner += `</ul>`;
+    }
+
+    if (ctx.mode === 'ebm_validator' && ctx.divergences && ctx.divergences.length > 0) {
+        inner += `<div style="font-size:0.78rem; font-weight:600; color:#b45309; margin-bottom:0.2rem;">Plan divergences:</div>
+        <ul style="margin:0 0 0.3rem 1.1rem; padding:0; font-size:0.78rem; color:#92400e;">`;
+        ctx.divergences.slice(0, 3).forEach(d => { inner += `<li>${d}</li>`; });
+        inner += `</ul>`;
+    }
+
+    if (ctx.mode === 'ddi_monitor' && ctx.ddi_alerts && ctx.ddi_alerts.length > 0) {
+        inner += `<div style="font-size:0.78rem; font-weight:600; color:#b91c1c; margin-bottom:0.2rem;">Interaction signals:</div>
+        <ul style="margin:0 0 0.3rem 1.1rem; padding:0; font-size:0.78rem; color:#7f1d1d;">`;
+        ctx.ddi_alerts.slice(0, 3).forEach(a => { inner += `<li>${a}</li>`; });
+        inner += `</ul>`;
+    }
+
+    if (ctx.citation_list && ctx.citation_list.length > 0) {
+        inner += `<details style="margin-top:0.25rem;">
+          <summary style="cursor:pointer; font-size:0.75rem; opacity:0.7;">
+            ${ctx.citation_list.length} citation(s)
+          </summary>
+          <ol style="margin:0.2rem 0 0 1.1rem; padding:0; font-size:0.72rem; opacity:0.8;">`;
+        ctx.citation_list.forEach(c => { inner += `<li style="margin:0.1rem 0;">${c}</li>`; });
+        inner += `</ol></details>`;
+    }
+
+    return `
+    <details id="pm-${uid}" style="margin-top:0.4rem; max-width:100%;">
+      <summary style="cursor:pointer; display:inline-flex; align-items:center; gap:0.4rem;
+                      font-size:0.75rem; font-weight:600; color:#4f46e5;
+                      background:#eef2ff; border:1px solid #c7d2fe;
+                      border-radius:8px; padding:0.25rem 0.65rem;">
+        ${meta.icon} ${meta.title} — Supporting Literature
+      </summary>
+      <div style="margin-top:0.4rem; padding:0.6rem 0.75rem;
+                  background:#f8faff; border:1px solid #c7d2fe;
+                  border-radius:8px; color:var(--text-primary);">
+        ${inner || '<em style="opacity:0.6;">No additional literature found.</em>'}
+      </div>
+    </details>`;
 }

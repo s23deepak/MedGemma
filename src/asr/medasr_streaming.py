@@ -1,17 +1,42 @@
 """
 MedASR Streaming Integration
 Real-time medical speech recognition using Google's MedASR model.
+
+Backend selection (tried in this order):
+  1. HF Space (Gradio) — set MEDASR_SPACE_ID (e.g. "your-username/medasr").
+                         Free CPU tier sufficient for 105M model (~$0/hr, sleeps when idle).
+                         Uses Gradio 4.x event API: POST /gradio_api/call/transcribe.
+                         Optional ZeroGPU for faster inference (HF PRO required).
+
+  2. Cloud endpoint    — set MEDASR_ENDPOINT_URL (HF Inference Endpoint or compatible
+                         REST API).  Set HF_TOKEN for authenticated endpoints.
+                         Sends raw WAV bytes; expects {"text": "..."} JSON response.
+                         ~$0.033/hr on HF CPU instance (pausable).
+
+  3. Local CTC         — google/medasr via AutoModelForCTC (requires transformers >= 5.0.0).
+                         vLLM 0.15.x pins transformers < 5 so this will fail when vLLM
+                         is installed alongside.
+
+  4. Local Whisper     — openai/whisper-medium via pipeline (transformers 4.x compatible,
+                         ~1.5 GB RAM).  Used automatically when the above three fail.
+
+Environment variables:
+  MEDASR_SPACE_ID       HuggingFace Space ID, e.g. "your-username/medasr"
+                        Space repo: spaces/medasr/ in this project
+  MEDASR_ENDPOINT_URL   URL of a deployed HF Inference Endpoint (or any compatible API)
+  HF_TOKEN              HuggingFace access token (for private spaces/endpoints)
 """
 
 import asyncio
+import io
 import logging
+import os
 import queue
 import threading
-from typing import AsyncGenerator, Callable
+from typing import Callable
 
 import numpy as np
 import torch
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -45,26 +70,92 @@ class MedASRStreaming:
         self._load_model()
     
     def _load_model(self):
-        """Load MedASR model with explicit device placement (no device_map='auto')
-        so that sleep()/wake_up() can freely move weights between CPU and GPU."""
-        logger.info(f"Loading MedASR model: {self.MODEL_ID}")
+        """Select and initialise the ASR backend.
 
-        self.processor = AutoProcessor.from_pretrained(
-            self.MODEL_ID,
-            trust_remote_code=True
-        )
+        Priority: HF Space → cloud endpoint → local CTC (medasr) → local Whisper fallback.
+        """
+        # ── Priority 1: HF Space via MEDASR_SPACE_ID ─────────────────────────
+        space_id = os.environ.get("MEDASR_SPACE_ID", "").strip()
+        if space_id:
+            # Convert "owner/space-name" → "https://owner-space-name.hf.space"
+            owner, _, space_name = space_id.partition("/")
+            slug = f"{owner}-{space_name}".lower()
+            self._endpoint_url = f"https://{slug}.hf.space"
+            self._hf_token = (
+                os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or ""
+            )
+            self._backend = "gradio"
+            logger.info(f"MedASR using HF Space: {self._endpoint_url}")
+            return
 
-        self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
-            self.MODEL_ID,
-            torch_dtype=torch.float16,
-            trust_remote_code=True
-        ).to(self.device)
+        # ── Priority 2: cloud endpoint via MEDASR_ENDPOINT_URL ───────────────
+        endpoint_url = os.environ.get("MEDASR_ENDPOINT_URL", "").strip()
+        if endpoint_url:
+            self._endpoint_url = endpoint_url
+            self._hf_token = (
+                os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or ""
+            )
+            self._backend = "cloud"
+            logger.info(f"MedASR using cloud endpoint: {endpoint_url}")
+            return
 
-        logger.info("MedASR model loaded successfully")
+        # ── Priority 3: google/medasr local CTC (requires transformers >= 5) ──
+        try:
+            from transformers import AutoModelForCTC, AutoProcessor  # type: ignore
+
+            logger.info(f"Loading MedASR model: {self.MODEL_ID}")
+            self.processor = AutoProcessor.from_pretrained(
+                self.MODEL_ID, trust_remote_code=True
+            )
+            self.model = AutoModelForCTC.from_pretrained(
+                self.MODEL_ID,
+                torch_dtype=torch.float16,
+                trust_remote_code=True,
+            ).to(self.device)
+            self._backend = "ctc"
+            logger.info("google/medasr (CTC) loaded successfully")
+            return
+        except Exception as e:
+            logger.warning(
+                f"Could not load google/medasr with AutoModelForCTC: {e}\n"
+                "This is expected when transformers < 5.0.0 is installed "
+                "(vLLM 0.15.x pins transformers<5). Falling back to Whisper.\n"
+                "To use google/medasr set MEDASR_SPACE_ID to a deployed "
+                "HuggingFace Space (see spaces/medasr/ in this project)."
+            )
+
+        # ── Priority 4: openai/whisper-medium (works with transformers 4.x, ~1.5 GB) ──
+        try:
+            from transformers import pipeline  # type: ignore
+
+            WHISPER_ID = "openai/whisper-medium"
+            logger.info(f"Loading Whisper fallback: {WHISPER_ID}")
+            self._pipeline = pipeline(
+                "automatic-speech-recognition",
+                model=WHISPER_ID,
+                torch_dtype=torch.float16,
+                device=self.device,
+                model_kwargs={"use_safetensors": True},
+            )
+            self._backend = "whisper"
+            self.model = self._pipeline.model      # expose for sleep/wake_up
+            self.processor = self._pipeline.tokenizer
+            logger.info(f"Whisper fallback ({WHISPER_ID}) loaded successfully")
+            return
+        except Exception as e:
+            logger.error(f"Failed to load Whisper fallback: {e}")
+            raise RuntimeError(
+                "No ASR backend could be loaded. Options:\n"
+                "  • Set MEDASR_SPACE_ID to your HF Space (see spaces/medasr/)\n"
+                "  • Set MEDASR_ENDPOINT_URL to a HuggingFace Inference Endpoint\n"
+                "  • Install transformers >= 5.0.0 for local google/medasr\n"
+                "  • Ensure openai/whisper-medium can be downloaded"
+            ) from e
 
     def sleep(self):
-        """Offload model weights to CPU to free GPU memory (mirrors vLLM sleep)."""
-        if self.model is None:
+        """Offload model weights to CPU to free GPU memory (mirrors vLLM sleep).
+        No-op when using a cloud or Gradio Space backend."""
+        if self._backend in ("cloud", "gradio") or self.model is None:
             return
         current_device = next(self.model.parameters()).device
         if current_device.type != "cpu":
@@ -73,8 +164,9 @@ class MedASRStreaming:
             torch.cuda.empty_cache()
 
     def wake_up(self):
-        """Move model weights back to GPU (mirrors vLLM wake_up)."""
-        if self.model is None:
+        """Move model weights back to GPU (mirrors vLLM wake_up).
+        No-op when using a cloud or Gradio Space backend."""
+        if self._backend in ("cloud", "gradio") or self.model is None:
             return
         current_device = next(self.model.parameters()).device
         if current_device.type == "cpu":
@@ -180,38 +272,161 @@ class MedASRStreaming:
     def _transcribe_chunk(self, audio_data: np.ndarray) -> str:
         """
         Transcribe a single audio chunk.
-        
+
         Args:
-            audio_data: Audio samples as numpy array
-            
+            audio_data: Audio samples as numpy array (float32, 16 kHz mono)
+
         Returns:
             Transcribed text
         """
         try:
-            model_device = next(self.model.parameters()).device
-            inputs = self.processor(
-                audio_data,
-                sampling_rate=self.SAMPLE_RATE,
-                return_tensors="pt"
-            ).to(model_device)
-            
-            with torch.inference_mode():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=256,
-                    language="en"
-                )
-            
-            text = self.processor.batch_decode(
-                outputs,
-                skip_special_tokens=True
-            )[0]
-            
-            return text.strip()
-            
+            if self._backend == "gradio":
+                return self._transcribe_gradio(audio_data)
+            elif self._backend == "cloud":
+                return self._transcribe_cloud(audio_data)
+            elif self._backend == "ctc":
+                return self._transcribe_ctc(audio_data)
+            else:
+                return self._transcribe_whisper(audio_data)
         except Exception as e:
             logger.error(f"Transcription error: {e}")
             return ""
+
+    def _transcribe_gradio(self, audio_data: np.ndarray) -> str:
+        """Call the HF Space Gradio API using the event-based endpoint.
+
+        Gradio 4.x flow:
+          1. POST /gradio_api/call/transcribe  → {"event_id": "abc"}
+          2. GET  /gradio_api/call/transcribe/{event_id}  → SSE stream
+             Reads until a "process_completed" event and extracts data[0].
+        """
+        import base64
+        import json
+        import struct
+        import urllib.request
+
+        # Build WAV bytes
+        pcm = (audio_data * 32767).clip(-32768, 32767).astype(np.int16)
+        pcm_bytes = pcm.tobytes()
+        data_size = len(pcm_bytes)
+        wav_header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF", 36 + data_size, b"WAVE",
+            b"fmt ", 16, 1, 1, self.SAMPLE_RATE,
+            self.SAMPLE_RATE * 2, 2, 16,
+            b"data", data_size,
+        )
+        wav_b64 = base64.b64encode(wav_header + pcm_bytes).decode()
+        audio_payload = {
+            "name": "audio.wav",
+            "data": f"data:audio/wav;base64,{wav_b64}",
+            "is_file": False,
+        }
+
+        base_url = self._endpoint_url.rstrip("/")
+        headers: dict = {"Content-Type": "application/json"}
+        if self._hf_token:
+            headers["Authorization"] = f"Bearer {self._hf_token}"
+
+        # Step 1: submit job
+        submit_payload = json.dumps({"data": [audio_payload]}).encode()
+        req = urllib.request.Request(
+            f"{base_url}/gradio_api/call/transcribe",
+            data=submit_payload, headers=headers, method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            event_id = json.loads(resp.read().decode())["event_id"]
+
+        # Step 2: poll SSE stream for result
+        result_req = urllib.request.Request(
+            f"{base_url}/gradio_api/call/transcribe/{event_id}",
+            headers=headers, method="GET"
+        )
+        with urllib.request.urlopen(result_req, timeout=120) as stream:
+            for raw_line in stream:
+                line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+                if line.startswith("data:"):
+                    payload_str = line[len("data:"):].strip()
+                    if not payload_str:
+                        continue
+                    try:
+                        payload = json.loads(payload_str)
+                    except json.JSONDecodeError:
+                        continue
+                    # Gradio sends {"msg": "process_completed", "output": {"data": [...]}}
+                    if isinstance(payload, dict) and payload.get("msg") == "process_completed":
+                        return payload["output"]["data"][0].strip()
+                    # Older SSE format: {"data": ["text"]}
+                    if isinstance(payload, dict) and "data" in payload:
+                        return payload["data"][0].strip()
+
+        return ""
+
+    def _transcribe_cloud(self, audio_data: np.ndarray) -> str:
+        """Send audio to the HuggingFace Inference Endpoint and return the transcript.
+
+        The endpoint receives raw WAV bytes and returns {"text": "..."}.
+        Uses the stdlib urllib so no extra dependencies are required.
+        """
+        import struct
+        import urllib.request
+
+        # Build a minimal WAV file in memory (PCM 16-bit, 16 kHz, mono)
+        pcm = (audio_data * 32767).clip(-32768, 32767).astype(np.int16)
+        pcm_bytes = pcm.tobytes()
+        num_channels = 1
+        bits_per_sample = 16
+        byte_rate = self.SAMPLE_RATE * num_channels * bits_per_sample // 8
+        block_align = num_channels * bits_per_sample // 8
+        data_size = len(pcm_bytes)
+        # 44-byte standard WAV header
+        wav_header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF", 36 + data_size, b"WAVE",
+            b"fmt ", 16, 1, num_channels, self.SAMPLE_RATE,
+            byte_rate, block_align, bits_per_sample,
+            b"data", data_size,
+        )
+        wav_bytes = wav_header + pcm_bytes
+
+        headers = {"Content-Type": "audio/wav"}
+        if self._hf_token:
+            headers["Authorization"] = f"Bearer {self._hf_token}"
+
+        req = urllib.request.Request(
+            self._endpoint_url, data=wav_bytes, headers=headers, method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            import json
+            result = json.loads(resp.read().decode())
+
+        # HF Inference Endpoints return {"text": "..."} for ASR models
+        return result.get("text", "").strip()
+
+    def _transcribe_ctc(self, audio_data: np.ndarray) -> str:
+        """CTC inference for google/medasr (transformers >= 5)."""
+        model_device = next(self.model.parameters()).device
+        inputs = self.processor(
+            audio_data,
+            sampling_rate=self.SAMPLE_RATE,
+            return_tensors="pt",
+        ).to(model_device)
+
+        with torch.inference_mode():
+            logits = self.model(**inputs).logits
+
+        # CTC decoding: argmax over vocabulary dimension
+        predicted_ids = torch.argmax(logits, dim=-1)
+        text = self.processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
+        return text.strip()
+
+    def _transcribe_whisper(self, audio_data: np.ndarray) -> str:
+        """Whisper pipeline inference for the transformers 4.x fallback."""
+        result = self._pipeline(
+            {"array": audio_data, "sampling_rate": self.SAMPLE_RATE},
+            return_timestamps=False,
+        )
+        return result["text"].strip()
     
     def _transcribe_buffer(self) -> str:
         """Transcribe all remaining audio in buffer."""
@@ -223,31 +438,43 @@ class MedASRStreaming:
     
     def transcribe_file(self, audio_path: str) -> str:
         """
-        Transcribe an audio file.
-        
+        Transcribe an audio file (WAV only — browser sends 16-bit mono WAV).
+
+        Uses the stdlib `wave` module (no extra dependencies).
+        Resamples to 16 kHz via scipy if the file sample rate differs.
+
         Args:
-            audio_path: Path to audio file
-            
+            audio_path: Path to a WAV file
+
         Returns:
             Complete transcription
         """
-        import soundfile as sf
-        
-        audio_data, sample_rate = sf.read(audio_path)
-        
-        # Convert to mono if stereo
-        if len(audio_data.shape) > 1:
-            audio_data = audio_data.mean(axis=1)
-        
-        # Resample if needed
-        if sample_rate != self.SAMPLE_RATE:
-            from scipy import signal
-            audio_data = signal.resample(
-                audio_data,
-                int(len(audio_data) * self.SAMPLE_RATE / sample_rate)
+        import wave
+
+        with wave.open(audio_path, "rb") as wf:
+            sample_rate = wf.getframerate()
+            n_channels  = wf.getnchannels()
+            raw_bytes   = wf.readframes(wf.getnframes())
+
+        audio_data = np.frombuffer(raw_bytes, dtype=np.int16)
+
+        # Downmix to mono if needed
+        if n_channels > 1:
+            audio_data = (
+                audio_data.reshape(-1, n_channels).mean(axis=1).astype(np.int16)
             )
-        
-        return self._transcribe_chunk(audio_data.astype(np.float32))
+
+        audio_float = audio_data.astype(np.float32) / 32768.0
+
+        # Resample to target rate if needed
+        if sample_rate != self.SAMPLE_RATE:
+            from scipy import signal as scipy_signal
+            audio_float = scipy_signal.resample(
+                audio_float,
+                int(len(audio_float) * self.SAMPLE_RATE / sample_rate),
+            )
+
+        return self._transcribe_chunk(audio_float.astype(np.float32))
 
 
 class SimulatedMedASR:

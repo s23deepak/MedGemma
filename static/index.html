@@ -191,6 +191,15 @@
                         </div>
                         <div class="alerts-content" id="alertsContent"></div>
                     </div>
+
+                    <!-- PubMed Insights (polling after SOAP generation) -->
+                    <div class="card hidden" id="pubmedCard" style="margin-top:1rem; border-top: 2px solid #6366f1;">
+                        <div class="card-header" style="cursor:pointer;" onclick="togglePubmedPanel()">
+                            <h2 style="font-size:0.95rem;">📚 PubMed Literature</h2>
+                            <span id="pubmedStatusBadge" class="status-badge" style="font-size:0.72rem;"></span>
+                        </div>
+                        <div id="pubmedBody" style="padding:0 1rem 1rem; font-size:0.85rem;"></div>
+                    </div>
                 </div>
             </section>
         </main>

@@ -491,6 +491,112 @@ class SOAPGenerator:
             generated_at=datetime.now().isoformat()
         )
     
+    def extract_clinical_orders(
+        self,
+        soap_note: "EnhancedSOAPNote | SOAPNote",
+        transcription: str = "",
+    ) -> dict[str, list[str]]:
+        """
+        Extract pending clinical orders from a SOAP note's Plan section and the
+        encounter transcription.
+
+        Returns a dict with keys:
+          - lab_orders:     list of lab test names
+          - imaging_orders: list of imaging study names
+          - medications:    list of newly prescribed medication names
+          - referrals:      list of specialist referral strings
+        """
+        plan = getattr(soap_note, "plan", "") or ""
+        combined_text = f"{plan}\n{transcription}"
+
+        # ── Labs ─────────────────────────────────────────────────────────────
+        lab_keywords = [
+            "CBC", "complete blood count",
+            "BMP", "basic metabolic panel",
+            "CMP", "comprehensive metabolic panel",
+            "HbA1c", "hemoglobin A1c",
+            "TSH", "thyroid",
+            "LFT", "liver function",
+            "lipid panel", "cholesterol",
+            "urinalysis", "UA",
+            "urine culture",
+            "blood culture",
+            "troponin",
+            "BNP", "brain natriuretic",
+            "D-dimer",
+            "creatinine", "eGFR",
+            "INR", "PT", "PTT", "coagulation",
+            "metabolic panel",
+            "electrolytes",
+            "glucose",
+            "HCG", "pregnancy test",
+            "PSA",
+            "ferritin", "iron studies",
+            "B12", "folate",
+            "vitamin D",
+            "drug level",
+            "sputum culture",
+            "throat culture",
+            "rapid strep",
+            "influenza test",
+            "COVID test",
+        ]
+
+        # ── Imaging ───────────────────────────────────────────────────────────
+        imaging_keywords = [
+            "chest X-ray", "CXR", "chest radiograph",
+            "X-ray", "radiograph",
+            "CT chest", "CT abdomen", "CT head", "CT pelvis", "CT scan",
+            "MRI brain", "MRI spine", "MRI", "magnetic resonance",
+            "ultrasound", "sonogram", "echo", "echocardiogram",
+            "EKG", "ECG", "electrocardiogram",
+            "stress test", "stress echo",
+            "bone scan", "nuclear",
+            "PET scan",
+            "mammogram", "mammography",
+            "colonoscopy",
+            "endoscopy", "EGD",
+            "spirometry", "pulmonary function",
+            "DEXA", "bone density",
+        ]
+
+        # ── Medication prescription keywords ──────────────────────────────────
+        med_patterns = [
+            r"(?:prescribe|start|initiate|add|continue|begin|order)\s+([A-Z][a-z]+(?:\s+\d+\s*(?:mg|mcg|g|units?))?)",
+            r"\b([A-Z][a-z]+(?:olol|pril|sartan|artan|statin|mycin|cillin|oxacin|azole|mide|dipine|vir|mab|ximab|zumab|lumab)\b(?:\s+\d+\s*(?:mg|mcg))?)",
+        ]
+
+        # ── Referrals ─────────────────────────────────────────────────────────
+        referral_patterns = [
+            r"refer(?:ral)?\s+to\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+            r"consult(?:ation)?\s+(?:with\s+)?([A-Z][a-z]+(?:ology|iatry|iatrics|ics|ist|ist)?)",
+            r"([A-Z][a-z]+(?:ology|iatry|iatrics|ics))\s+(?:referral|consult|consultation|evaluation)",
+        ]
+
+        def _scan(text: str, keywords: list[str]) -> list[str]:
+            found: list[str] = []
+            text_lower = text.lower()
+            for kw in keywords:
+                if kw.lower() in text_lower and kw not in found:
+                    found.append(kw)
+            return found
+
+        def _regex_scan(text: str, patterns: list[str]) -> list[str]:
+            found: list[str] = []
+            for pat in patterns:
+                for m in re.finditer(pat, text, re.IGNORECASE):
+                    item = m.group(1).strip() if m.lastindex else m.group(0).strip()
+                    if item and item not in found:
+                        found.append(item)
+            return found[:10]
+
+        return {
+            "lab_orders": _scan(combined_text, lab_keywords),
+            "imaging_orders": _scan(combined_text, imaging_keywords),
+            "medications": _regex_scan(combined_text, med_patterns),
+            "referrals": _regex_scan(combined_text, referral_patterns),
+        }
+
     def generate_template(
         self,
         chief_complaint: str,

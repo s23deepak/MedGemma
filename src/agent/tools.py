@@ -351,6 +351,72 @@ TOOLS = [
                 "required": ["patient_id", "note"]
             }
         }
+    },
+    # ==================== PubMed Evidence & Zebra Hunt ====================
+    {
+        "type": "function",
+        "function": {
+            "name": "search_pubmed",
+            "description": (
+                "Query PubMed literature in one of three modes:\n"
+                "  case_matcher  — Zebra hunt: search Case Reports for rare diagnoses "
+                "matching an unusual symptom cluster. Use when the patient has atypical markers "
+                "that don't fit common diagnoses.\n"
+                "  ebm_validator — Evidence-Based Medicine check: find Systematic Reviews / "
+                "Meta-analyses / RCTs from the last 24 months to validate a treatment plan.\n"
+                "  ddi_monitor   — Novel drug-drug interaction scan: search recent pharmacology "
+                "literature for interactions not yet in standard DDI databases."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["case_matcher", "ebm_validator", "ddi_monitor"],
+                        "description": "Search mode — see tool description"
+                    },
+                    "symptoms": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "[case_matcher] Patient's common symptoms (e.g. ['cough', 'fatigue'])"
+                    },
+                    "atypical_markers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "[case_matcher] Unusual / atypical findings that distinguish the case (e.g. ['tongue discoloration', 'photosensitivity'])"
+                    },
+                    "assessment": {
+                        "type": "string",
+                        "description": "[ebm_validator] SOAP Assessment section text"
+                    },
+                    "plan": {
+                        "type": "string",
+                        "description": "[ebm_validator] SOAP Plan section text"
+                    },
+                    "medications": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "[ddi_monitor] Full current medication list"
+                    },
+                    "new_medications": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "[ddi_monitor] Newly added medications to prioritise in the scan"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum articles to return (default 5, max 10)",
+                        "default": 5
+                    },
+                    "date_years_back": {
+                        "type": "integer",
+                        "description": "[ebm_validator / ddi_monitor] Only include papers from the last N years (default 2)",
+                        "default": 2
+                    }
+                },
+                "required": ["mode"]
+            }
+        }
     }
 ]
 

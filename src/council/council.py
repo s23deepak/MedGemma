@@ -55,7 +55,8 @@ class CouncilDeliberation:
     discussion_summary: str
     final_recommendation: str
     dissenting_opinions: list[str] = field(default_factory=list)
-    
+    pubmed_insights: dict = field(default_factory=dict)   # PubMed case_matcher results
+
     def to_dict(self) -> dict:
         return {
             "case_id": self.case_id,
@@ -69,7 +70,8 @@ class CouncilDeliberation:
             "consensus_confidence_percent": f"{int(self.consensus_confidence * 100)}%",
             "discussion_summary": self.discussion_summary,
             "final_recommendation": self.final_recommendation,
-            "dissenting_opinions": self.dissenting_opinions
+            "dissenting_opinions": self.dissenting_opinions,
+            "pubmed_insights": self.pubmed_insights,
         }
 
 
@@ -79,16 +81,18 @@ class DiagnosticCouncil:
     and synthesizes them into a consensus recommendation.
     """
     
-    def __init__(self, agent=None, num_rollouts: int = 5):
+    def __init__(self, agent=None, num_rollouts: int = 5, pubmed_agent=None):
         """
         Initialize the diagnostic council.
-        
+
         Args:
             agent: MedGemma agent for generating opinions
             num_rollouts: Number of parallel opinions to generate
+            pubmed_agent: PubMedSynthesisAgent for literature backing
         """
         self.agent = agent
         self.num_rollouts = num_rollouts
+        self.pubmed_agent = pubmed_agent
         self.deliberation_history: list[CouncilDeliberation] = []
     
     def _generate_single_opinion(
@@ -421,7 +425,29 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
             final_recommendation=final_recommendation,
             dissenting_opinions=list(set(dissenting))
         )
-        
+
+        # ── PubMed Zebra Hunt — enrich with rare-diagnosis literature ──────────
+        if self.pubmed_agent is not None and symptoms:
+            try:
+                common = symptoms[:3]
+                atypical = symptoms[3:]
+                pm_result = self.pubmed_agent.case_matcher(
+                    common_symptoms=common,
+                    atypical_markers=atypical,
+                    max_results=4,
+                )
+                deliberation.pubmed_insights = {
+                    "status": "completed",
+                    "summary": pm_result.summary,
+                    "rare_diagnoses": pm_result.rare_diagnoses,
+                    "key_findings": pm_result.key_findings,
+                    "citation_list": pm_result.citation_list,
+                    "query_used": pm_result.query_used,
+                    "article_count": len(pm_result.articles),
+                }
+            except Exception as e:
+                deliberation.pubmed_insights = {"status": "error", "error": str(e)}
+
         self.deliberation_history.append(deliberation)
         return deliberation
     
@@ -433,11 +459,14 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
 # Singleton instance
 _council = None
 
-def get_diagnostic_council(agent=None, num_rollouts: int = 5) -> DiagnosticCouncil:
+def get_diagnostic_council(agent=None, num_rollouts: int = 5, pubmed_agent=None) -> DiagnosticCouncil:
     """Get or create the diagnostic council singleton."""
     global _council
     if _council is None:
-        _council = DiagnosticCouncil(agent=agent, num_rollouts=num_rollouts)
-    elif agent is not None and _council.agent is None:
-        _council.agent = agent
+        _council = DiagnosticCouncil(agent=agent, num_rollouts=num_rollouts, pubmed_agent=pubmed_agent)
+    else:
+        if agent is not None and _council.agent is None:
+            _council.agent = agent
+        if pubmed_agent is not None and _council.pubmed_agent is None:
+            _council.pubmed_agent = pubmed_agent
     return _council

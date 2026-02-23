@@ -506,6 +506,11 @@ async function generateSOAP() {
             } else {
                 showToast('SOAP note generated', 'success');
             }
+
+            // Start polling for PubMed background analysis
+            if (data.pubmed_insights_status === 'running') {
+                startPubmedPolling(state.sessionId);
+            }
         }
 
     } catch (error) {
@@ -660,4 +665,132 @@ async function handleAudioFileUpload(input) {
     } finally {
         input.value = '';  // Reset so same file can be re-uploaded
     }
+}
+
+// ===== PubMed Insights Polling =====
+
+let pubmedPollInterval = null;
+let pubmedExpanded = true;
+
+function startPubmedPolling(sessionId) {
+    stopPubmedPolling();  // clear any previous
+
+    const card = document.getElementById('pubmedCard');
+    const badge = document.getElementById('pubmedStatusBadge');
+    const body  = document.getElementById('pubmedBody');
+
+    card.classList.remove('hidden');
+    badge.textContent = 'Searching PubMed…';
+    badge.style.background = '#fef9c3';
+    badge.style.color = '#92400e';
+    body.innerHTML = '<p style="color:var(--text-secondary); padding-top:0.5rem;">Scanning literature in background…</p>';
+
+    pubmedPollInterval = setInterval(async () => {
+        try {
+            const res = await fetch(`/api/encounters/${sessionId}/pubmed-insights`);
+            if (!res.ok) return;
+            const data = await res.json();
+
+            if (data.status === 'completed') {
+                stopPubmedPolling();
+                badge.textContent = 'Done';
+                badge.style.background = '#d1fae5';
+                badge.style.color = '#065f46';
+                renderPubmedInsights(data.results || {});
+            } else if (data.status === 'error') {
+                stopPubmedPolling();
+                badge.textContent = 'Error';
+                badge.style.background = '#fee2e2';
+                badge.style.color = '#991b1b';
+                body.innerHTML = `<p style="color:#dc2626;padding-top:0.5rem;">PubMed analysis error: ${data.error || 'Unknown'}</p>`;
+            }
+            // Keep polling while status === 'running'
+        } catch (_) {}
+    }, 3500);
+}
+
+function stopPubmedPolling() {
+    if (pubmedPollInterval) {
+        clearInterval(pubmedPollInterval);
+        pubmedPollInterval = null;
+    }
+}
+
+function togglePubmedPanel() {
+    const body = document.getElementById('pubmedBody');
+    pubmedExpanded = !pubmedExpanded;
+    body.style.display = pubmedExpanded ? '' : 'none';
+}
+
+function renderPubmedInsights(results) {
+    const body = document.getElementById('pubmedBody');
+    const sections = [];
+
+    const modeLabels = {
+        case_matcher:  { icon: '🦓', title: 'Zebra Hunt — Rare Diagnoses' },
+        ebm_validator: { icon: '📊', title: 'Evidence-Based Validation' },
+        ddi_monitor:   { icon: '💊', title: 'Drug Interaction Signals' },
+    };
+
+    for (const [mode, result] of Object.entries(results)) {
+        if (result.error) continue;
+        const meta = modeLabels[mode] || { icon: '📚', title: mode };
+
+        let html = `<div style="margin-top:1rem; padding:0.75rem; background:var(--bg-primary); border-radius:8px; border:1px solid var(--border);">`;
+        html += `<div style="font-weight:600; margin-bottom:0.5rem;">${meta.icon} ${meta.title}</div>`;
+
+        if (result.summary) {
+            html += `<p style="color:var(--text-secondary); margin-bottom:0.5rem; line-height:1.5;">${result.summary}</p>`;
+        }
+
+        // Mode-specific lists
+        if (mode === 'case_matcher' && result.rare_diagnoses && result.rare_diagnoses.length > 0) {
+            html += `<div style="font-weight:500; margin-bottom:0.25rem;">Rare Diagnoses to Consider:</div><ul style="margin:0 0 0.5rem 1.2rem; padding:0;">`;
+            result.rare_diagnoses.slice(0, 5).forEach(d => {
+                html += `<li style="margin:0.15rem 0;">${d}</li>`;
+            });
+            html += `</ul>`;
+        }
+
+        if (mode === 'ebm_validator' && result.divergences && result.divergences.length > 0) {
+            html += `<div style="font-weight:500; color:#b45309; margin-bottom:0.25rem;">Plan Divergences from Evidence:</div><ul style="margin:0 0 0.5rem 1.2rem; padding:0; color:#92400e;">`;
+            result.divergences.slice(0, 4).forEach(d => {
+                html += `<li style="margin:0.15rem 0; font-size:0.82rem;">${d}</li>`;
+            });
+            html += `</ul>`;
+        }
+
+        if (mode === 'ddi_monitor' && result.ddi_alerts && result.ddi_alerts.length > 0) {
+            html += `<div style="font-weight:500; color:#b91c1c; margin-bottom:0.25rem;">Interaction Signals:</div><ul style="margin:0 0 0.5rem 1.2rem; padding:0; color:#7f1d1d;">`;
+            result.ddi_alerts.slice(0, 4).forEach(a => {
+                html += `<li style="margin:0.15rem 0; font-size:0.82rem;">${a}</li>`;
+            });
+            html += `</ul>`;
+        }
+
+        // Key findings
+        if (result.key_findings && result.key_findings.length > 0) {
+            html += `<details style="margin-top:0.35rem;"><summary style="cursor:pointer; font-size:0.8rem; color:var(--text-secondary);">Key findings (${result.key_findings.length})</summary><ul style="margin:0.25rem 0 0 1.2rem; padding:0;">`;
+            result.key_findings.forEach(f => {
+                html += `<li style="margin:0.2rem 0; font-size:0.78rem; color:var(--text-secondary);">${f}</li>`;
+            });
+            html += `</ul></details>`;
+        }
+
+        // Citations
+        if (result.citation_list && result.citation_list.length > 0) {
+            html += `<details style="margin-top:0.25rem;"><summary style="cursor:pointer; font-size:0.8rem; color:var(--text-secondary);">Citations (${result.citation_list.length})</summary><ol style="margin:0.25rem 0 0 1.2rem; padding:0;">`;
+            result.citation_list.forEach(c => {
+                html += `<li style="margin:0.2rem 0; font-size:0.75rem; color:var(--text-secondary);">${c}</li>`;
+            });
+            html += `</ol></details>`;
+        }
+
+        html += `</div>`;
+        sections.push(html);
+    }
+
+    body.innerHTML = sections.length > 0
+        ? sections.join('')
+        : '<p style="color:var(--text-secondary); padding-top:0.5rem;">No relevant PubMed literature found for this encounter.</p>';
 }

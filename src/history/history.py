@@ -119,8 +119,28 @@ class PatientHistoryService:
         
         # Sort by date (newest first) and filter
         entries = [e for e in entries if e.date >= cutoff]
+
+        # Add treatment summaries (stored directly on fhir_server by TreatmentSummaryService)
+        for summary in getattr(self.fhir, "treatment_summaries", {}).get(patient_id, []):
+            try:
+                date = datetime.fromisoformat(summary["encounter_date"])
+                if date < cutoff:
+                    continue
+                entries.append(HistoryEntry(
+                    date=date,
+                    category="treatment_summary",
+                    title=f"Treatment: {summary.get('primary_diagnosis', 'Encounter')}",
+                    details=(
+                        f"Chief complaint: {summary.get('chief_complaint', 'N/A')}. "
+                        f"Follow-up: {summary.get('follow_up_instructions', 'See notes.')}"
+                    ),
+                    source=f"Encounter summary #{summary.get('summary_id', '')}",
+                ))
+            except (ValueError, KeyError):
+                pass
+
         entries.sort(key=lambda x: x.date, reverse=True)
-        
+
         return [e.to_dict() for e in entries]
     
     def search_observations(
