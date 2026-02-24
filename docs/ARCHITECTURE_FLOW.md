@@ -34,9 +34,14 @@
   │ Detect   │ │ Drug Ix   │ │ Past      │
   │ Finding  │ │ Critical  │ │ Encounters│
   │ Classify │ │ Alerts    │ │ Allergies │
-  └────┬─────┘ └─────┬─────┘ └─────┬─────┘
-       │              │              │
-       └──────────────┼──────────────┘
+    └────┬─────┘ └─────┬─────┘ └─────┬─────┘
+      │              │              │
+      │              │       ┌───────────────┐
+      │              │       │ Local Trends  │
+      │              │       │ + Ext Vocab   │
+      │              │       │ (MeSH + ICD)  │
+      │              │       └──────┬────────┘
+      └──────────────┼──────────────┼────────
                       ▼
   ┌───────────────────────────────────────────┐
   │          Enhanced SOAP Note               │
@@ -375,6 +380,7 @@
 | Intelligence | Clinical Intel | Rule-based | ICD-10, drug interactions, alerts |
 | Council | Diagnostic Council | Multi-rollout | 3–7 opinions + consensus + PubMed |
 | PubMed | Synthesis Agent | NCBI E-utils + LLM | Case matching, EBM validation, DDI monitoring |
+| Trends | Local Trend Engine | RSS + MeSH + Firestore cache | Location-aware environmental/public-health context |
 | AI Chat | AI Portal | MedGemma + Canvas | Multimodal physician chat with annotations |
 | Compliance | SOAP Checker | Rule-based | Symptom flags, documentation rates |
 | Portal | Patient Assistant | NLP + Rules | Emergency detection, guardrails |
@@ -383,3 +389,31 @@
 | EHR | FHIR Server | Mock / Real | Patient data storage |
 | Frontend | FastAPI + JS | WebSocket + REST | Real-time UI, 6 feature pages |
 | Testing | pytest | 72 tests | Full coverage, no GPU needed |
+
+---
+
+## 11. Local Trend Intelligence Flow
+
+```
+Patient location (FHIR) ───────────────┐
+                    ▼
+               Trend Query Builder
+             (location-anchored RSS queries)
+                    ▼
+             Geo Relevance + De-dup Filter
+                    ▼
+        External Medical Vocabulary Enrichment
+         (NLM MeSH + ICD-10 + local fallback)
+                    ▼
+            Firestore Shared Vocab Cache
+           system_cache/medical_vocab_mesh
+                    ▼
+            Symptom-to-trend Correlation
+                    ▼
+    SOAP / MedGemma context + local_trend_insights response field
+```
+
+Notes:
+- Trend context is supportive and non-diagnostic.
+- Cache backend is configurable: `auto` / `firestore` / `local`.
+- Optional vector enrichment can be toggled via env.

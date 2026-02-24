@@ -43,6 +43,10 @@ const portalState = {
     activeRecordTarget: null,   // 'manual' | 'chat'
 };
 
+// Holds the current patient's image list so onclick handlers can reference by
+// index rather than embedding raw text (which breaks on apostrophes/quotes).
+let _patientImages = [];
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -170,11 +174,12 @@ function renderPatientDetails(data) {
 
     // Images stored in patient record
     if (data.images && data.images.length > 0) {
+        _patientImages = data.images;   // store so loadPatientImageByIndex can use safely
         html += `<div class="summary-label">Existing Images</div><div style="display:flex; flex-direction:column; gap:0.4rem;">`;
-        data.images.forEach(img => {
+        data.images.forEach((img, idx) => {
             const date = new Date(img.timestamp).toLocaleDateString();
             html += `<button class="tool-btn" style="text-align:left; font-size:0.78rem;"
-                onclick="loadPatientImage('${img.url}', '${img.modality || 'xray'}', '${img.analysis || ''}')">
+                onclick="loadPatientImageByIndex(${idx})">
                 🖼 ${(img.modality || 'imaging').toUpperCase()} — ${date}
             </button>`;
         });
@@ -207,6 +212,12 @@ async function loadPatientImage(url, modality, preExistingAnalysis) {
     } catch (e) {
         showToast('Failed to load patient image', 'error');
     }
+}
+
+async function loadPatientImageByIndex(idx) {
+    const img = _patientImages[idx];
+    if (!img) { showToast('Image not found', 'error'); return; }
+    await loadPatientImage(img.url, img.modality || 'xray', img.analysis || '');
 }
 
 // ── Image handling ────────────────────────────────────────────────────────────

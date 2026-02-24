@@ -3,8 +3,10 @@
 
 <head>
     <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <meta name="description" content="Longitudinal patient history — encounters, medications, labs, imaging, and AI-summarised clinical timeline.">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Patient History - MedGemma</title>
+    <title>Patient History | MedGemma</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -18,10 +20,11 @@
 
         .search-section {
             background: var(--bg-secondary);
-            border-radius: 12px;
+            border-radius: 16px;
             padding: 1.5rem;
             margin-bottom: 2rem;
             box-shadow: var(--shadow-sm);
+            border: 1px solid rgba(226,232,240,0.8);
         }
 
         .search-row {
@@ -52,17 +55,20 @@
 
         .btn-search {
             padding: 0.75rem 2rem;
-            background: var(--primary);
+            background: linear-gradient(135deg, var(--primary), #1d4ed8);
             color: white;
             border: none;
-            border-radius: 8px;
+            border-radius: 10px;
             cursor: pointer;
             font-weight: 600;
             font-family: inherit;
+            box-shadow: 0 3px 12px rgba(37,99,235,0.3);
+            transition: all 0.15s;
         }
 
         .btn-search:hover {
-            background: var(--primary-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 5px 18px rgba(37,99,235,0.4);
         }
 
         .patient-info-banner {
@@ -106,9 +112,16 @@
             position: relative;
             margin-bottom: 1.5rem;
             background: var(--bg-secondary);
-            border-radius: 12px;
+            border-radius: 14px;
             padding: 1.25rem;
             box-shadow: var(--shadow-sm);
+            border: 1px solid rgba(226,232,240,0.8);
+            transition: all 0.2s;
+        }
+
+        .timeline-item:hover {
+            box-shadow: var(--shadow-md);
+            transform: translateX(3px);
         }
 
         .timeline-item::before {
@@ -223,6 +236,8 @@
                     <a href="/council">Diagnostic Council</a>
                     <a href="/patient-portal">Patient Portal</a>
                     <a href="/ai-portal">AI Chat Portal</a>
+                    <a href="/shift-brief">Shift Brief</a>
+                    <a href="/simulation">Simulation</a>
                 </div>
             </div>
             <div class="nav-user">
@@ -411,6 +426,11 @@
                 searchHistory();
             });
         </script>
+<footer class="app-footer">
+    <span>MedGemma Clinical Assistant</span>
+    <span class="separator">•</span>
+    <span>Powered by Google Health AI Developer Foundations</span>
+</footer>
 </body>
 
 </html>

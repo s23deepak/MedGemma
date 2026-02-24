@@ -3,8 +3,10 @@
 
 <head>
     <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <meta name="description" content="Real-time clinical compliance checks powered by MedGemma AI — drug interactions, guideline adherence, and EHR completeness.">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SOAP Compliance Monitor - MedGemma</title>
+    <title>Compliance Monitoring | MedGemma</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -25,15 +27,23 @@
 
         .stat-card {
             background: var(--bg-secondary);
-            border-radius: 12px;
-            padding: 1.5rem;
+            border-radius: 16px;
+            padding: 1.75rem 1.5rem;
             text-align: center;
             box-shadow: var(--shadow-sm);
+            border: 1px solid rgba(226,232,240,0.8);
+            transition: all 0.2s;
+        }
+
+        .stat-card:hover {
+            box-shadow: var(--shadow-md);
+            transform: translateY(-2px);
         }
 
         .stat-value {
-            font-size: 2.5rem;
-            font-weight: 700;
+            font-size: 2.6rem;
+            font-weight: 800;
+            letter-spacing: -0.04em;
         }
 
         .stat-label {
@@ -67,17 +77,20 @@
 
         .btn-check {
             padding: 0.75rem 1.5rem;
-            background: var(--primary);
+            background: linear-gradient(135deg, var(--primary), #1d4ed8);
             color: white;
             border: none;
-            border-radius: 8px;
+            border-radius: 10px;
             cursor: pointer;
             font-weight: 600;
             font-family: inherit;
+            box-shadow: 0 3px 12px rgba(37,99,235,0.3);
+            transition: all 0.15s;
         }
 
         .btn-check:hover {
-            background: var(--primary-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 5px 18px rgba(37,99,235,0.4);
         }
 
         .flags-section {
@@ -181,6 +194,8 @@
                     <a href="/council">Diagnostic Council</a>
                     <a href="/patient-portal">Patient Portal</a>
                     <a href="/ai-portal">AI Chat Portal</a>
+                    <a href="/shift-brief">Shift Brief</a>
+                    <a href="/simulation">Simulation</a>
                 </div>
             </div>
             <div class="nav-user">
@@ -288,6 +303,11 @@
 
             document.addEventListener('DOMContentLoaded', runComplianceCheck);
         </script>
+<footer class="app-footer">
+    <span>MedGemma Clinical Assistant</span>
+    <span class="separator">•</span>
+    <span>Powered by Google Health AI Developer Foundations</span>
+</footer>
 </body>
 
 </html>

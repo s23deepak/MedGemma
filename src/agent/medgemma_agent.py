@@ -95,6 +95,15 @@ IMPORTANT GUIDELINES:
 - Consider the patient's history and context when available
 - Flag any inconsistencies between reported symptoms and image findings
 
+SOAP NOTE FORMAT — when generating a SOAP note, use exactly these four markdown headers, each on its own line, with the actual clinical content written beneath each header:
+
+## Subjective
+## Objective
+## Assessment
+## Plan
+
+Do not use any other heading style (e.g. "S:", "**Subjective**", "SUBJECTIVE:"). Use ## exactly. Write real clinical content under each header — never output placeholder text.
+
 When you need to perform actions, use the available tools by responding with a JSON tool call in this format:
 ```json
 {"tool": "tool_name", "parameters": {...}}
@@ -322,31 +331,17 @@ Be thorough but concise. Flag any urgent findings prominently with ⚠️."""
 
 {chr(10).join(context_parts)}
 
-Generate a structured SOAP note with the following sections:
+Write the SOAP note using these exact section headers in order: `## Subjective`, `## Objective`, `## Assessment`, `## Plan`. Each header must appear on its own line followed immediately by the real clinical content for that section. Do not output any placeholder text.
 
-## Subjective
-[Patient's reported symptoms and history]
-
-## Objective  
-[Physical examination findings, vital signs, and imaging results]
-
-## Assessment
-[Clinical impression, differential diagnoses, and reasoning]
-
-## Plan
-[Treatment plan, follow-up, and any referrals]
-
----
-
-Additionally, identify:
+After the Plan section content, on new lines write:
 1. **Potential Missed Diagnoses**: Any conditions suggested by the data that may not have been explicitly considered
 2. **Critical Alerts**: Any urgent findings requiring immediate attention
 3. **Inconsistencies**: Any discrepancies between reported symptoms and objective findings"""
 
         # Prepare inputs (text only for SOAP generation)
         messages = [
-            {"role": "system", "content": self._build_system_prompt()},
-            {"role": "user", "content": prompt}
+            {"role": "system", "content": [{"type": "text", "text": self._build_system_prompt()}]},
+            {"role": "user", "content": [{"type": "text", "text": prompt}]}
         ]
         
         inputs = self.processor.apply_chat_template(

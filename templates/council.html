@@ -3,8 +3,10 @@
 
 <head>
     <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <meta name="description" content="Multi-specialist AI diagnostic deliberation — simultaneous specialist viewpoints for complex differential diagnoses.">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Diagnostic Council - MedGemma</title>
+    <title>Diagnostic Council | MedGemma</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -18,10 +20,21 @@
 
         .case-input {
             background: var(--bg-secondary);
-            border-radius: 12px;
-            padding: 1.5rem;
+            border-radius: 16px;
+            padding: 1.75rem;
             margin-bottom: 2rem;
             box-shadow: var(--shadow-sm);
+            border: 1px solid rgba(226,232,240,0.8);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .case-input::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary), #7c3aed);
         }
 
         .case-input h2 {
@@ -67,16 +80,20 @@
             background: linear-gradient(135deg, var(--primary), #7c3aed);
             color: white;
             border: none;
-            border-radius: 8px;
+            border-radius: 10px;
             cursor: pointer;
-            font-size: 1.1rem;
-            font-weight: 600;
+            font-size: 1.05rem;
+            font-weight: 700;
             margin-top: 1rem;
             font-family: inherit;
+            box-shadow: 0 4px 16px rgba(37,99,235,0.32);
+            transition: all 0.15s;
+            letter-spacing: 0.01em;
         }
 
         .btn-deliberate:hover {
-            opacity: 0.9;
+            transform: translateY(-1px);
+            box-shadow: 0 6px 24px rgba(124,58,237,0.4);
         }
 
         .btn-deliberate:disabled {
@@ -121,10 +138,16 @@
 
         .opinion-card {
             background: var(--bg-secondary);
-            border-radius: 12px;
+            border-radius: 14px;
             padding: 1.25rem;
-            border: 2px solid transparent;
+            border: 1.5px solid transparent;
             box-shadow: var(--shadow-sm);
+            transition: all 0.2s;
+        }
+
+        .opinion-card:hover {
+            box-shadow: var(--shadow-md);
+            transform: translateY(-2px);
         }
 
         .opinion-card.agreed {
@@ -264,6 +287,8 @@
                     <a href="/council" class="active">Diagnostic Council</a>
                     <a href="/patient-portal">Patient Portal</a>
                     <a href="/ai-portal">AI Chat Portal</a>
+                    <a href="/shift-brief">Shift Brief</a>
+                    <a href="/simulation">Simulation</a>
                 </div>
             </div>
             <div class="nav-user">
@@ -548,6 +573,11 @@
                 return html;
             }
         </script>
+<footer class="app-footer">
+    <span>MedGemma Clinical Assistant</span>
+    <span class="separator">•</span>
+    <span>Powered by Google Health AI Developer Foundations</span>
+</footer>
 </body>
 
 </html>

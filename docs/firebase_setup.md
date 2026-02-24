@@ -64,6 +64,25 @@ uv run python main.py --use-vllm
 
 Open http://localhost:8000 — the app now reads from Firestore instead of hardcoded data.
 
+## Step 8: Enable Shared Medical Vocabulary Cache (Recommended)
+
+The local health trends module can store external MeSH-enriched vocabulary in Firestore so all app instances share one cache.
+
+Add to your `.env`:
+
+```bash
+echo 'MEDICAL_VOCAB_CACHE_BACKEND=firestore' >> ~/MedGemma/.env
+```
+
+Optional vector toggle:
+
+```bash
+echo 'MEDICAL_VOCAB_VECTOR_BACKEND=in_memory' >> ~/MedGemma/.env
+```
+
+This creates/uses:
+- `system_cache/medical_vocab_mesh`
+
 ## Firestore Collections Structure
 
 ```
@@ -80,4 +99,11 @@ patients/
   P002/
     name: "Carlos Martinez"
     ...
+
+system_cache/
+  medical_vocab_mesh/
+    fetched_at: "2026-..."
+    source: "NLM MeSH Lookup API"
+    event_categories: {...}
+    symptom_synonyms: {...}
 ```

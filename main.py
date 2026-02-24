@@ -3,12 +3,14 @@ MedGemma Clinical Assistant - Main Application
 FastAPI server for the AI-powered clinical decision support system.
 """
 
+import argparse
 import asyncio
 import base64
 import json
 import logging
 import os
 import sys
+import uvicorn
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -20,12 +22,16 @@ from fastapi.staticfiles import StaticFiles
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.ehr import get_fhir_server
+from src.ehr import get_fhir_server, FirestoreFHIRServer
 from src.soap import SOAPGenerator, SOAPNote, EnhancedSOAPNote
 from src.treatment import get_treatment_service
 from src.monitoring import get_discharge_monitor
 from src.auth.prior_auth import get_prior_auth_service
 from src.pubmed import get_synthesis_agent
+from src.shift import get_shift_brief_service
+from src.referral import get_referral_letter_service
+from src.simulation import get_simulation_engine, list_cases as list_sim_cases
+from src.trends import get_local_health_trends_service
 
 # Configure logging
 logging.basicConfig(
@@ -46,9 +52,68 @@ treatment_service = None
 discharge_monitor = None
 prior_auth_service = None
 pubmed_agent = None
+shift_brief_service = None
+referral_service = None
+simulation_engine = None
+local_trends_service = None
+trends_refresh_task: asyncio.Task | None = None
 
 # Store active sessions
 sessions: dict[str, dict] = {}
+
+
+def _extract_symptoms_for_trends(text: str) -> list[str]:
+    """Extract high-signal symptom keywords for local trend correlation."""
+    symptom_vocab = [
+        "cough", "dyspnea", "shortness of breath", "wheezing", "chest pain",
+        "fever", "chills", "fatigue", "nausea", "vomiting", "diarrhea",
+        "headache", "dizziness", "rash",
+    ]
+    text_lower = (text or "").lower()
+    return [symptom for symptom in symptom_vocab if symptom in text_lower]
+
+
+async def _refresh_local_trends_loop():
+    """Refresh trend cache for known patient/session locations every 12 hours."""
+    while True:
+        try:
+            if local_trends_service is not None and fhir_server is not None:
+                locations: set[str] = set()
+
+                # Active session locations
+                for session in sessions.values():
+                    patient_location = ((session.get("patient_context") or {}).get("patient") or {}).get("location")
+                    if patient_location:
+                        locations.add(str(patient_location))
+
+                # Known patient locations from EHR
+                try:
+                    for patient in fhir_server.list_patients():
+                        patient_id = patient.get("id")
+                        if not patient_id:
+                            continue
+                        summary = fhir_server.get_patient_summary(patient_id)
+                        if summary:
+                            location = (summary.get("patient") or {}).get("location")
+                            if location:
+                                locations.add(str(location))
+                except Exception as exc:
+                    logger.warning("Trend refresh patient scan failed: %s", exc)
+
+                for location in locations:
+                    try:
+                        local_trends_service.refresh_location_trends(location=location)
+                    except Exception as exc:
+                        logger.warning("Trend refresh failed for %s: %s", location, exc)
+
+                if locations:
+                    logger.info("Local trend cache refreshed for %d location(s)", len(locations))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Local trend background refresh failed: %s", exc)
+
+        await asyncio.sleep(60 * 60 * 12)
 
 
 def load_models_lazy():
@@ -105,23 +170,24 @@ def load_models_lazy():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    global fhir_server, soap_generator, treatment_service, discharge_monitor, prior_auth_service, pubmed_agent
+    global fhir_server, soap_generator, treatment_service, discharge_monitor, prior_auth_service, pubmed_agent, shift_brief_service, referral_service, simulation_engine, local_trends_service, trends_refresh_task
     
     logger.info("Starting MedGemma Clinical Assistant...")
-    
-    # Initialize FHIR server: Firestore if configured
+
+    # Initialize FHIR server — Firebase is the primary data store
     try:
-        from src.config.firebase_config import is_firebase_available
-        if is_firebase_available():
-            from src.ehr.firestore_server import FirestoreFHIRServer
-            fhir_server = FirestoreFHIRServer()
-            logger.info("Using Firestore-backed FHIR server")
-        else:
-            fhir_server = get_fhir_server()
-            logger.info("Firebase not configured — using mock FHIR server")
+        fhir_server = FirestoreFHIRServer()
+        logger.info("Using Firestore-backed FHIR server")
+    except RuntimeError:
+        logger.critical(
+            "Firebase is not configured. Place firebase-key.json in the project root "
+            "or set the FIREBASE_KEY_PATH environment variable. "
+            "See docs/firebase_setup.md for instructions."
+        )
+        raise SystemExit(1)
     except Exception as e:
-        logger.warning(f"Firestore init failed: {e} — using mock FHIR server")
-        fhir_server = get_fhir_server()
+        logger.critical(f"Firestore initialisation failed: {e}")
+        raise
     
     soap_generator = SOAPGenerator()
 
@@ -130,7 +196,20 @@ async def lifespan(app: FastAPI):
     discharge_monitor = get_discharge_monitor(fhir_server)
     prior_auth_service = get_prior_auth_service(fhir_server)
     pubmed_agent = get_synthesis_agent()   # MedGemma reference injected later in load_models_lazy
-    logger.info("Treatment summary, discharge monitoring, prior auth, and PubMed synthesis services initialized")
+    shift_brief_service = get_shift_brief_service(fhir_server)
+    referral_service = get_referral_letter_service(fhir_server)
+    simulation_engine = get_simulation_engine()
+    local_trends_service = get_local_health_trends_service()
+    logger.info("Treatment summary, discharge monitoring, prior auth, PubMed synthesis, shift brief, referral letter, and simulation services initialized")
+
+    # Run 60-day hospital-case finalization in background (non-blocking)
+    import asyncio
+    asyncio.get_running_loop().run_in_executor(
+        None, treatment_service.finalize_hospital_cases
+    )
+
+    # Refresh local health trends every 12 hours in background
+    trends_refresh_task = asyncio.create_task(_refresh_local_trends_loop())
 
     logger.info("FHIR server and SOAP generator initialized")
     
@@ -138,11 +217,19 @@ async def lifespan(app: FastAPI):
     load_models_lazy()
     if agent is not None:
         logger.info(f"Agent loaded: {type(agent).__name__}")
+        simulation_engine.set_agent(agent)
     else:
         logger.info("No agent loaded (simulated mode or model unavailable)")
     
     yield
     
+    if trends_refresh_task is not None:
+        trends_refresh_task.cancel()
+        try:
+            await trends_refresh_task
+        except asyncio.CancelledError:
+            pass
+
     logger.info("Shutting down MedGemma Clinical Assistant...")
 
 
@@ -300,8 +387,16 @@ async def start_encounter(patient_id: str = Form(...)):
         "image_path": None,
         "image_modality": None,
         "soap_note": None,
-        "status": "active"
+        "status": "active",
+        "local_trend_insights": None,
     }
+
+    patient_location = ((patient_summary.get("patient") or {}).get("location") or "").strip()
+    if local_trends_service is not None and patient_location:
+        try:
+            local_trends_service.refresh_location_trends(location=patient_location)
+        except Exception as exc:
+            logger.warning("Initial trend prefetch failed for %s: %s", patient_location, exc)
     
     # Return everything from get_patient_summary plus session status
     return {
@@ -397,12 +492,40 @@ async def generate_soap(
     transcription = session.get("transcription", "")
     image_findings = session.get("image_analysis", {}).get("analysis", None) if session.get("image_analysis") else None
     patient_context = session.get("patient_context")
+    patient_location = ((patient_context or {}).get("patient") or {}).get("location", "")
+
+    symptoms_for_trends = _extract_symptoms_for_trends(transcription)
+    trend_insights = None
+    trend_context = ""
+    if local_trends_service is not None and patient_location and symptoms_for_trends:
+        try:
+            trend_insights = local_trends_service.correlate(
+                location=patient_location,
+                symptoms=symptoms_for_trends,
+            )
+            session["local_trend_insights"] = trend_insights
+
+            if trend_insights.get("matched_signal_count", 0) > 0:
+                top_signals = [
+                    m.get("signal", {}).get("title", "")
+                    for m in trend_insights.get("matched_signals", [])[:3]
+                ]
+                top_signals = [s for s in top_signals if s]
+                if top_signals:
+                    trend_context = (
+                        f"\n\nLocal Health Context ({patient_location}): "
+                        f"Recent trend signals potentially related to today's symptoms include: "
+                        f"{' | '.join(top_signals)}. "
+                        "Use as supportive exposure context only; require physician validation."
+                    )
+        except Exception as exc:
+            logger.warning("Local trend correlation failed: %s", exc)
     
     if agent is not None:
         try:
             # Use MedGemma to process encounter
             result = agent.process_encounter(
-                transcription=transcription,
+                transcription=f"{transcription}{trend_context}",
                 patient_context=patient_context,
                 image_path=session.get("image_path"),
                 image_modality=session.get("image_modality", "xray")
@@ -414,7 +537,7 @@ async def generate_soap(
 
             # Generate enhanced SOAP with clinical intelligence
             enhanced_soap = soap_generator.generate_enhanced_soap(
-                transcription=transcription,
+                transcription=f"{transcription}{trend_context}",
                 patient_context=patient_context,
                 image_findings=image_findings,
                 raw_soap_text=result.get("soap_note")
@@ -444,6 +567,7 @@ async def generate_soap(
                 "differentials": enhanced_soap.differentials,
                 "pending_orders": pending_orders,
                 "pubmed_insights_status": "running",
+                "local_trend_insights": trend_insights,
             }
         except Exception as e:
             import traceback
@@ -452,7 +576,7 @@ async def generate_soap(
     
     # Simulated mode - still use enhanced SOAP with clinical intelligence
     enhanced_soap = soap_generator.generate_enhanced_soap(
-        transcription=transcription or f"Patient presents with: {chief_complaint or 'symptoms as dictated'}.",
+        transcription=(transcription or f"Patient presents with: {chief_complaint or 'symptoms as dictated'}.") + trend_context,
         patient_context=patient_context,
         image_findings=image_findings
     )
@@ -489,6 +613,7 @@ async def generate_soap(
         "differentials": enhanced_soap.differentials,
         "pending_orders": pending_orders,
         "pubmed_insights_status": "running",
+        "local_trend_insights": trend_insights,
         "simulated": True
     }
 
@@ -544,17 +669,64 @@ async def approve_soap(session_id: str):
                 orders=combined_orders,
                 clinical_indication=indication,
             )
+            # Generate AI medical-necessity narrative for each PA request
+            patient_context = session.get("patient_context") or {}
+            for pa_req in pa_list:
+                try:
+                    prior_auth_service.generate_narrative(
+                        pa_request=pa_req,
+                        patient_context=patient_context,
+                        soap_note=soap_note,
+                        agent=agent,
+                    )
+                except Exception as _e:
+                    logger.warning(f"PA narrative generation skipped for {pa_req.auth_id}: {_e}")
             pa_requests = [p.to_dict() for p in pa_list]
             if pa_requests:
                 logger.info(f"Auto-created {len(pa_requests)} prior auth request(s) for encounter {session_id}")
     except Exception as e:
         logger.warning(f"Prior auth auto-detection failed (non-fatal): {e}")
 
+    # ── Generate referral letters for any specialist referral orders ───────────
+    referral_letters: list[dict] = []
+    try:
+        referral_orders = session.get("pending_orders", {}).get("referrals", [])
+        if referral_orders:
+            # Pull patient memories for inclusion in the letter
+            memories: list[dict] = []
+            try:
+                from src.memory.patient_memory import get_patient_memory
+                pm = get_patient_memory()
+                raw = pm.get_all(session["patient_id"])
+                memories = raw if isinstance(raw, list) else []
+            except Exception:
+                pass  # memories are optional
+
+            # Infer referring provider name from session if available
+            referring_provider = session.get("provider_name", "")
+
+            letters = referral_service.generate_letters_for_encounter(
+                patient_id=session["patient_id"],
+                encounter_id=session_id,
+                referral_orders=referral_orders,
+                soap_note=soap_note,
+                patient_context=session.get("patient_context") or {},
+                memories=memories,
+                referring_provider=referring_provider,
+                agent=agent,
+            )
+            referral_letters = [ltr.to_dict() for ltr in letters]
+            if referral_letters:
+                logger.info(f"Generated {len(referral_letters)} referral letter(s) for encounter {session_id}")
+    except Exception as e:
+        logger.warning(f"Referral letter generation failed (non-fatal): {e}")
+
     return {
         "status": "approved",
         "ehr_update": result,
         "treatment_summary": summary_data,
         "prior_auth_requests": pa_requests,
+        "referral_letters": referral_letters,
     }
 
 
@@ -716,6 +888,144 @@ async def ai_portal_page(request: Request):
     return templates.TemplateResponse("ai_portal.html", {"request": request})
 
 
+@app.get("/shift-brief", response_class=HTMLResponse)
+async def shift_brief_page(request: Request):
+    """Pre-shift briefing page for clinical staff."""
+    return templates.TemplateResponse("shift_brief.html", {"request": request})
+
+
+@app.post("/api/shift-brief")
+async def api_shift_brief(payload: dict):
+    """
+    Generate a pre-shift briefing for a clinical provider.
+
+    Body: { "provider_name": str, "role": str }
+    Returns: { provider_name, role, shift_date, patients, ai_summary }
+    """
+    if shift_brief_service is None:
+        raise HTTPException(status_code=503, detail="Shift brief service not initialized")
+
+    provider_name = payload.get("provider_name", "").strip()
+    role = payload.get("role", "doctor").strip().lower()
+
+    if not provider_name:
+        raise HTTPException(status_code=400, detail="provider_name is required")
+
+    brief = shift_brief_service.generate_brief(
+        provider_name=provider_name,
+        role=role,
+        agent=agent,
+    )
+    return JSONResponse(content=brief)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Clinical Simulation routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/simulation", response_class=HTMLResponse)
+async def simulation_page(request: Request):
+    """Clinical simulation lab for resident training."""
+    return templates.TemplateResponse("simulation.html", {"request": request})
+
+
+@app.get("/api/simulation/cases")
+async def api_sim_cases():
+    """Return the list of available simulation cases."""
+    return JSONResponse(content=list_sim_cases())
+
+
+@app.post("/api/simulation/start")
+async def api_sim_start(payload: dict):
+    """
+    Start a new simulation session.
+    Body: { "resident_name": str, "case_id": str }
+    Returns full session dict.
+    """
+    resident_name = payload.get("resident_name", "Resident").strip()
+    case_id = payload.get("case_id", "").strip()
+    if not case_id:
+        raise HTTPException(status_code=400, detail="case_id is required")
+    try:
+        session = simulation_engine.start_session(resident_name, case_id)
+        return JSONResponse(content=session.to_dict())
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/simulation/history")
+async def api_sim_history(payload: dict):
+    """
+    Resident asks the simulated patient a history question.
+    Body: { "session_id": str, "question": str }
+    Returns: { "question": str, "response": str, "ai": bool }
+    """
+    session_id = payload.get("session_id", "")
+    question = payload.get("question", "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+    try:
+        result = simulation_engine.ask_history(session_id, question)
+        return JSONResponse(content=result)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/simulation/exam")
+async def api_sim_exam(payload: dict):
+    """
+    Resident requests physical examination findings.
+    Body: { "session_id": str, "system": str }
+    Returns: { "system": str, "findings": str }
+    """
+    session_id = payload.get("session_id", "")
+    system = payload.get("system", "").strip()
+    if not system:
+        raise HTTPException(status_code=400, detail="system is required")
+    try:
+        result = simulation_engine.view_exam(session_id, system)
+        return JSONResponse(content=result)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/simulation/investigate")
+async def api_sim_investigate(payload: dict):
+    """
+    Resident orders an investigation.
+    Body: { "session_id": str, "investigation": str }
+    Returns: { "investigation": str, "result": str }
+    """
+    session_id = payload.get("session_id", "")
+    investigation = payload.get("investigation", "").strip()
+    if not investigation:
+        raise HTTPException(status_code=400, detail="investigation is required")
+    try:
+        result = simulation_engine.order_investigation(session_id, investigation)
+        return JSONResponse(content=result)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/simulation/submit")
+async def api_sim_submit(payload: dict):
+    """
+    Resident submits diagnosis and management for scoring.
+    Body: { "session_id": str, "diagnosis": str, "management": list[str] }
+    Returns full score object with AI feedback.
+    """
+    session_id = payload.get("session_id", "")
+    diagnosis = payload.get("diagnosis", "").strip()
+    management = payload.get("management", [])
+    if not diagnosis:
+        raise HTTPException(status_code=400, detail="diagnosis is required")
+    try:
+        score = simulation_engine.submit_assessment(session_id, diagnosis, management)
+        return JSONResponse(content=score)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # History API endpoints
 @app.get("/api/history/{patient_id}/timeline")
 async def get_patient_timeline(patient_id: str, days: int = 365):
@@ -854,6 +1164,26 @@ async def get_portal_query_history(patient_id: str):
     from src.portal import get_patient_assistant
     assistant = get_patient_assistant(fhir_server=fhir_server)
     return {"queries": assistant.get_query_history(patient_id)}
+
+
+# ── Health Belief Model profile routes ────────────────────────────────────────
+
+@app.get("/api/portal/{patient_id}/hbm-profile")
+async def get_hbm_profile(patient_id: str):
+    """Return the current Health Belief Model profile for a patient."""
+    from src.portal.hbm_profile import get_hbm_service
+    profile = get_hbm_service().load(patient_id)
+    return profile.to_dict()
+
+
+@app.delete("/api/portal/{patient_id}/hbm-profile")
+async def reset_hbm_profile(patient_id: str):
+    """Reset a patient's HBM profile to neutral defaults."""
+    from src.portal.hbm_profile import get_hbm_service, HealthBeliefProfile
+    svc = get_hbm_service()
+    fresh = HealthBeliefProfile(patient_id=patient_id)
+    svc.save(fresh)
+    return {"status": "reset", "patient_id": patient_id}
 
 
 # ============================================================
@@ -1512,8 +1842,25 @@ async def get_encounter_prior_auths(session_id: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PubMed synthesis routes
+# Referral letter routes
 # ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/patients/{patient_id}/referral-letters")
+async def get_referral_letters(patient_id: str):
+    """Return all referral letters for a patient (newest first)."""
+    letters = referral_service.get_letters(patient_id)
+    return {"patient_id": patient_id, "letters": letters, "count": len(letters)}
+
+
+@app.get("/api/encounters/{session_id}/referral-letters")
+async def get_encounter_referral_letters(session_id: str):
+    """Return referral letters generated in a specific encounter (from session cache)."""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    patient_id = sessions[session_id]["patient_id"]
+    all_letters = referral_service.get_letters(patient_id)
+    letters = [ltr for ltr in all_letters if ltr.get("encounter_id") == session_id]
+    return {"session_id": session_id, "letters": letters, "count": len(letters)}
 
 @app.get("/api/encounters/{session_id}/pubmed-insights")
 async def get_pubmed_insights(session_id: str):

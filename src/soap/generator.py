@@ -437,16 +437,20 @@ class SOAPGenerator:
         missed_diagnoses = []
         critical_alerts = []
         
+        # Strict patterns: only match markdown headers at the start of a line.
+        # Using re.search (first match only) prevents mid-prose words like
+        # "objective findings" or "plan of care" from creating false boundaries.
         section_patterns = [
-            (r"(?:##?\s*)?(?:S(?:ubjective)?[:\s]*)", "subjective"),
-            (r"(?:##?\s*)?(?:O(?:bjective)?[:\s]*)", "objective"),
-            (r"(?:##?\s*)?(?:A(?:ssessment)?[:\s]*)", "assessment"),
-            (r"(?:##?\s*)?(?:P(?:lan)?[:\s]*)", "plan"),
+            (r"(?m)^#{1,3}\s*S(?:ubjective)?[\s:\-]*", "subjective"),
+            (r"(?m)^#{1,3}\s*O(?:bjective)?[\s:\-]*", "objective"),
+            (r"(?m)^#{1,3}\s*A(?:ssessment)?[\s:\-]*", "assessment"),
+            (r"(?m)^#{1,3}\s*P(?:lan)?[\s:\-]*", "plan"),
         ]
-        
+
         boundaries = []
         for pattern, section_name in section_patterns:
-            for match in re.finditer(pattern, raw_text, re.IGNORECASE):
+            match = re.search(pattern, raw_text, re.IGNORECASE)
+            if match:
                 boundaries.append((match.start(), match.end(), section_name))
         
         boundaries.sort(key=lambda x: x[0])

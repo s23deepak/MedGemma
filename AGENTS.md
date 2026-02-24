@@ -8,8 +8,9 @@ This agent assists physicians with clinical encounters by:
 1. **Listening** to doctor-patient conversations via MedASR
 2. **Analyzing** medical images (CT, MRI, X-ray) with MedGemma
 3. **Fetching** patient context from EHR via FHIR
-4. **Generating** SOAP documentation with missed diagnosis detection
-5. **Updating** EHR records upon physician approval
+4. **Correlating** local public-health/environment trends with same-day symptoms
+5. **Generating** SOAP documentation with missed diagnosis detection
+6. **Updating** EHR records upon physician approval
 
 ## Available Tools
 
@@ -50,6 +51,15 @@ Query PubMed via NCBI E-utils in one of three clinical synthesis modes.
   - **DDI Monitor**: Scans pharmacology literature for novel drug-drug interactions not yet captured in standard databases. Prioritizes pairs containing newly added medications. Caps at 12 drug pairs to respect NCBI rate limits.
 - **Rate limiting**: 3 req/s by default; set `NCBI_API_KEY` env var for 10 req/s
 - **Non-blocking**: After SOAP generation, PubMed analysis runs as a FastAPI `BackgroundTask` and can be polled via `GET /api/encounters/{session_id}/pubmed-insights`
+
+### local_health_trends (automatic context pipeline)
+The system automatically enriches encounters with location-aware trend context.
+- **Input source**: Patient location from EHR demographics
+- **Signals**: Public health alerts, outbreaks, air quality/wildfire smoke, heat risk, water contamination
+- **Vocabulary**: External NLM MeSH enrichment + ICD-10 augmentation + local fallback lexicon
+- **Caching**: In-memory + optional Firestore shared cache (`system_cache/medical_vocab_mesh`)
+- **Output**: Supportive `local_trend_insights` included in SOAP generation response
+- **Guardrail**: Trend context is non-diagnostic and always requires physician validation
 
 ## Safety Constraints
 

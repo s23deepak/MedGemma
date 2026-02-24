@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <meta name="description" content="AI-powered pre-shift briefing — annotated patient summaries, clinical priorities, and alerts prepared before your shift begins.">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pre-Shift Briefing | MedGemma</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        .brief-container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .selector-card {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.75rem 2rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow-sm);
+            display: flex;
+            gap: 1.5rem;
+            align-items: flex-end;
+            flex-wrap: wrap;
+        }
+
+        .selector-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .selector-group label {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .selector-group select {
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.95rem;
+        }
+
+        .btn-generate {
+            padding: 0.75rem 2rem;
+            background: linear-gradient(135deg, var(--primary), #1d4ed8);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.95rem;
+            white-space: nowrap;
+            transition: all 0.15s;
+            box-shadow: 0 3px 12px rgba(37,99,235,0.3);
+        }
+
+        .btn-generate:hover { transform: translateY(-1px); box-shadow: 0 5px 18px rgba(37,99,235,0.4); }
+        .btn-generate:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+        .role-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            text-transform: capitalize;
+            background: var(--primary-light, #dbeafe);
+            color: var(--primary, #1d4ed8);
+        }
+
+        .role-badge.nurse   { background: #fce7f3; color: #9d174d; }
+        .role-badge.resident { background: #d1fae5; color: #065f46; }
+
+        /* ── AI Summary ─────────────────────────────────────────── */
+        .ai-summary-card {
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+            border: 1px solid #bae6fd;
+            border-left: 4px solid var(--primary, #2563eb);
+            border-radius: 12px;
+            padding: 1.5rem 2rem;
+            margin-bottom: 2rem;
+            display: none;
+        }
+
+        .ai-summary-card h3 {
+            margin: 0 0 0.75rem;
+            color: var(--primary, #1d4ed8);
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .ai-summary-text {
+            white-space: pre-wrap;
+            font-size: 0.9rem;
+            line-height: 1.7;
+            color: var(--text-primary);
+        }
+
+        /* ── Patient cards ──────────────────────────────────────── */
+        .patients-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1.25rem;
+            margin-top: 1rem;
+        }
+
+        .patient-card {
+            background: var(--bg-secondary);
+            border-radius: 14px;
+            padding: 1.25rem 1.5rem;
+            box-shadow: var(--shadow-sm);
+            border: 1px solid rgba(226,232,240,0.8);
+            transition: all 0.2s;
+        }
+
+        .patient-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+
+        .patient-card.critical {
+            border-left: 4px solid #ef4444;
+        }
+
+        .patient-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 0.75rem;
+        }
+
+        .patient-name {
+            font-weight: 700;
+            font-size: 1rem;
+            color: var(--text-primary);
+        }
+
+        .patient-meta {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 0.15rem;
+        }
+
+        .visit-badge {
+            padding: 0.2rem 0.65rem;
+            background: var(--bg-tertiary, #f3f4f6);
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .section-label {
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin: 0.7rem 0 0.3rem;
+        }
+
+        .tag-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+
+        .tag {
+            padding: 0.15rem 0.55rem;
+            border-radius: 4px;
+            font-size: 0.78rem;
+            background: var(--bg-tertiary, #f3f4f6);
+            color: var(--text-primary);
+        }
+
+        .tag.allergy { background: #fef3c7; color: #92400e; }
+        .tag.critical { background: #fee2e2; color: #b91c1c; }
+        .tag.prn      { background: #ede9fe; color: #5b21b6; }
+
+        .obs-row { font-size: 0.82rem; color: var(--text-secondary); }
+
+        .appt-info {
+            font-size: 0.83rem;
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .no-patients {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: var(--text-secondary);
+            display: none;
+        }
+
+        .loading-spinner {
+            display: none;
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-secondary);
+        }
+
+        .section-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin: 0 0 0.5rem;
+        }
+
+        .results-area { display: none; }
+    </style>
+</head>
+
+<body>
+    <header class="app-header">
+        <div class="header-left">
+            <a href="/" class="logo" style="text-decoration:none;">
+                <span class="logo-icon">⚕</span>
+                <span class="logo-text">MedGemma</span>
+            </a>
+            <div class="nav-links">
+                <a href="/">Encounters</a>
+                <a href="/history">Patient History</a>
+                <a href="/compliance">Compliance</a>
+                <a href="/council">Diagnostic Council</a>
+                <a href="/patient-portal">Patient Portal</a>
+                <a href="/ai-portal">AI Chat Portal</a>
+                <a href="/shift-brief" class="active">Shift Brief</a>
+                <a href="/simulation">Simulation</a>
+            </div>
+        </div>
+        <div class="nav-user">
+            <span class="user-role">Clinical Staff</span>
+        </div>
+    </header>
+
+    <div class="brief-container">
+        <div style="margin-bottom: 1.5rem;">
+            <h1 style="font-size:1.6rem; font-weight:700; margin:0;">Pre-Shift Briefing</h1>
+            <p style="color:var(--text-secondary); margin:0.3rem 0 0; font-size:0.9rem;">
+                AI-generated summary of your scheduled appointments and clinical priorities.
+            </p>
+        </div>
+
+        <!-- Selector -->
+        <div class="selector-card">
+            <div class="selector-group">
+                <label>Provider</label>
+                <select id="providerSelect" onchange="onProviderChange()">
+                    <option value="" disabled selected>Select your name…</option>
+                    <option value="Dr. Sarah Smith"   data-role="doctor">Dr. Sarah Smith (Doctor)</option>
+                    <option value="Dr. Michael Jones" data-role="doctor">Dr. Michael Jones (Doctor)</option>
+                    <option value="Dr. Emily Lee"     data-role="resident">Dr. Emily Lee (Resident)</option>
+                    <option value="Maria Garcia, RN"  data-role="nurse">Maria Garcia, RN (Nurse)</option>
+                </select>
+            </div>
+            <div class="selector-group" style="flex:0 0 auto; min-width:120px;">
+                <label>Role</label>
+                <select id="roleSelect">
+                    <option value="doctor">Doctor</option>
+                    <option value="resident">Resident</option>
+                    <option value="nurse">Nurse</option>
+                </select>
+            </div>
+            <button class="btn-generate" id="generateBtn" onclick="generateBrief()">
+                Generate Shift Brief
+            </button>
+        </div>
+
+        <!-- Loading -->
+        <div class="loading-spinner" id="loadingSpinner">
+            <div class="spinner"></div>
+            <p>Generating your shift brief…</p>
+        </div>
+
+        <!-- Results -->
+        <div class="results-area" id="resultsArea">
+            <!-- Header -->
+            <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1rem; flex-wrap:wrap;">
+                <span class="section-title" id="resultsTitle"></span>
+                <span class="role-badge" id="roleBadge"></span>
+                <span style="color:var(--text-secondary); font-size:0.85rem;" id="shiftDate"></span>
+            </div>
+
+            <!-- AI Summary -->
+            <div class="ai-summary-card" id="aiSummaryCard">
+                <h3>🧠 AI Shift Summary</h3>
+                <div class="ai-summary-text" id="aiSummaryText"></div>
+            </div>
+
+            <!-- Patient cards -->
+            <div class="section-title" id="patientsSectionTitle"></div>
+            <div class="patients-grid" id="patientsGrid"></div>
+            <div class="no-patients" id="noPatients">
+                No appointments found for this provider today.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function onProviderChange() {
+            const sel = document.getElementById('providerSelect');
+            const opt = sel.options[sel.selectedIndex];
+            const role = opt.getAttribute('data-role');
+            if (role) {
+                document.getElementById('roleSelect').value = role;
+            }
+        }
+
+        async function generateBrief() {
+            const providerName = document.getElementById('providerSelect').value;
+            const role = document.getElementById('roleSelect').value;
+            if (!providerName) {
+                alert('Please select a provider first.');
+                return;
+            }
+
+            // Show spinner, hide results
+            document.getElementById('generateBtn').disabled = true;
+            document.getElementById('loadingSpinner').style.display = 'block';
+            document.getElementById('resultsArea').style.display = 'none';
+
+            try {
+                const res = await fetch('/api/shift-brief', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider_name: providerName, role })
+                });
+                if (!res.ok) throw new Error(`Server error: ${res.status}`);
+                const data = await res.json();
+                renderBrief(data);
+            } catch (err) {
+                alert('Failed to generate shift brief: ' + err.message);
+            } finally {
+                document.getElementById('generateBtn').disabled = false;
+                document.getElementById('loadingSpinner').style.display = 'none';
+            }
+        }
+
+        function renderBrief(data) {
+            document.getElementById('resultsTitle').textContent =
+                `Shift Brief — ${data.provider_name}`;
+
+            const badge = document.getElementById('roleBadge');
+            badge.textContent = data.role;
+            badge.className = 'role-badge ' + data.role;
+
+            document.getElementById('shiftDate').textContent = data.shift_date;
+
+            // AI summary
+            if (data.ai_summary) {
+                document.getElementById('aiSummaryCard').style.display = 'block';
+                document.getElementById('aiSummaryText').textContent = data.ai_summary;
+            }
+
+            // Patient cards
+            const grid = document.getElementById('patientsGrid');
+            grid.innerHTML = '';
+
+            if (!data.patients || data.patients.length === 0) {
+                document.getElementById('noPatients').style.display = 'block';
+                document.getElementById('patientsSectionTitle').textContent = '';
+            } else {
+                document.getElementById('noPatients').style.display = 'none';
+                document.getElementById('patientsSectionTitle').textContent =
+                    `Scheduled Patients (${data.patients.length})`;
+                data.patients.forEach(p => grid.appendChild(buildPatientCard(p, data.role)));
+            }
+
+            document.getElementById('resultsArea').style.display = 'block';
+        }
+
+        function buildPatientCard(p, role) {
+            const hasCritical = p.critical_alerts && p.critical_alerts.length > 0;
+            const card = document.createElement('div');
+            card.className = 'patient-card' + (hasCritical ? ' critical' : '');
+
+            const appt = p.appointment || {};
+            const prnMeds = (p.medications || []).filter(m =>
+                /prn|as needed/i.test(m.dosage || '')
+            );
+
+            card.innerHTML = `
+                <div class="patient-header">
+                    <div>
+                        <div class="patient-name">${esc(p.patient_name)}</div>
+                        <div class="patient-meta">${p.age ? p.age + 'y' : ''}${p.gender ? ' · ' + p.gender : ''}</div>
+                    </div>
+                    <span class="visit-badge">${esc(appt.type || 'Visit')}</span>
+                </div>
+
+                ${hasCritical ? `
+                <div class="section-label">Critical Alerts</div>
+                <div class="tag-list">
+                    ${p.critical_alerts.map(a => `<span class="tag critical">⚠ ${esc(a)}</span>`).join('')}
+                </div>` : ''}
+
+                ${p.conditions && p.conditions.length ? `
+                <div class="section-label">Active Conditions</div>
+                <div class="tag-list">
+                    ${p.conditions.map(c => `<span class="tag">${esc(c.name)}</span>`).join('')}
+                </div>` : ''}
+
+                ${p.medications && p.medications.length ? `
+                <div class="section-label">Medications</div>
+                <div class="tag-list">
+                    ${p.medications.map(m => `<span class="tag">${esc(m.name)}</span>`).join('')}
+                </div>` : ''}
+
+                ${role === 'nurse' && prnMeds.length ? `
+                <div class="section-label">PRN Available</div>
+                <div class="tag-list">
+                    ${prnMeds.map(m => `<span class="tag prn">${esc(m.name)}</span>`).join('')}
+                </div>` : ''}
+
+                ${p.allergies && p.allergies.length ? `
+                <div class="section-label">Allergies</div>
+                <div class="tag-list">
+                    ${p.allergies.map(a => `<span class="tag allergy">${esc(a.substance || '')}</span>`).join('')}
+                </div>` : ''}
+
+                ${p.observations && p.observations.length ? `
+                <div class="section-label">Recent Vitals / Labs</div>
+                ${p.observations.map(o =>
+                    `<div class="obs-row">${esc(o.type)}: <strong>${esc(o.value)}</strong></div>`
+                ).join('')}` : ''}
+
+                <div class="appt-info">
+                    <strong>Date:</strong> ${esc(appt.date || 'Today')}
+                    ${appt.provider ? ` &nbsp;·&nbsp; <strong>Provider:</strong> ${esc(appt.provider)}` : ''}
+                </div>
+            `;
+            return card;
+        }
+
+        function esc(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+    </script>
+<footer class="app-footer">
+    <span>MedGemma Clinical Assistant</span>
+    <span class="separator">•</span>
+    <span>Powered by Google Health AI Developer Foundations</span>
+</footer>
+</body>
+</html>

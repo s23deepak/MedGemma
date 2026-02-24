@@ -16,6 +16,14 @@ from src.config.firebase_config import get_firestore_client, is_firebase_availab
 from src.agent.medgemma_agent import MedGemmaAgent
 
 
+def clear_subcollection(db, patient_id: str, subcol: str):
+    """Delete all documents in a patient subcollection before re-seeding."""
+    coll = db.collection("patients").document(patient_id).collection(subcol)
+    docs = coll.stream()
+    for doc in docs:
+        doc.reference.delete()
+
+
 def seed_patients(db):
     """Seed demo patient demographics."""
     patients = {
@@ -41,11 +49,11 @@ def seed_patients(db):
             "state": "CA"
         }
     }
-    
+
     for pid, data in patients.items():
         db.collection("patients").document(pid).set(data)
         print(f"  ✓ Patient {pid}: {data['name']}")
-    
+
     return patients
 
 
@@ -66,11 +74,12 @@ def seed_conditions(db):
             {"name": "Migraine", "status": "active", "onset": "2019-08-20"}
         ]
     }
-    
+
     for pid, conds in conditions.items():
+        clear_subcollection(db, pid, "conditions")
         coll = db.collection("patients").document(pid).collection("conditions")
-        for c in conds:
-            coll.add(c)
+        for i, c in enumerate(conds):
+            coll.document(str(i)).set(c)
         print(f"  ✓ {pid}: {len(conds)} conditions")
 
 
@@ -92,11 +101,12 @@ def seed_medications(db):
             {"name": "Ibuprofen 400mg", "dosage": "As needed for pain", "status": "active"}
         ]
     }
-    
+
     for pid, meds in medications.items():
+        clear_subcollection(db, pid, "medications")
         coll = db.collection("patients").document(pid).collection("medications")
-        for m in meds:
-            coll.add(m)
+        for i, m in enumerate(meds):
+            coll.document(str(i)).set(m)
         print(f"  ✓ {pid}: {len(meds)} medications")
 
 
@@ -114,11 +124,12 @@ def seed_allergies(db):
             {"substance": "Codeine", "reaction": "Nausea and vomiting", "severity": "moderate"}
         ]
     }
-    
+
     for pid, allgs in allergies.items():
+        clear_subcollection(db, pid, "allergies")
         coll = db.collection("patients").document(pid).collection("allergies")
-        for a in allgs:
-            coll.add(a)
+        for i, a in enumerate(allgs):
+            coll.document(str(i)).set(a)
         print(f"  ✓ {pid}: {len(allgs)} allergies")
 
 
@@ -141,24 +152,24 @@ def seed_observations(db):
             {"type": "BMI", "value": "24.5", "date": "2026-02-10T09:00:00Z"}
         ]
     }
-    
+
     for pid, obs in observations.items():
+        clear_subcollection(db, pid, "observations")
         coll = db.collection("patients").document(pid).collection("observations")
-        for o in obs:
-            coll.add(o)
+        for i, o in enumerate(obs):
+            coll.document(str(i)).set(o)
         print(f"  ✓ {pid}: {len(obs)} observations")
 
 
 def seed_images(db):
     """Seed patient images dynamically."""
-    
+
     analysis_text = "Analysis pending..."
     try:
         agent = MedGemmaAgent()
         image_path = Path("data/sample_xray_normal.jpg")
         if image_path.exists():
             print("  Analyzing sample X-Ray with MedGemma... this may take a moment.")
-            # Important: Set the agent up properly if it needs to load
             result = agent.analyze_image(str(image_path), modality="xray")
             analysis_text = result.get("analysis", "Error in analysis generation.")
             print(f"  Successfully generated analysis: {analysis_text[:50]}...")
@@ -174,23 +185,24 @@ def seed_images(db):
     images = {
         "P003": [
             {
-                "url": "/static/images/mock_chest_xray.jpg", 
+                "url": "/static/images/mock_chest_xray.jpg",
                 "modality": "xray",
                 "timestamp": "2025-11-15T14:30:00Z",
                 "analysis": analysis_text
             }
         ]
     }
-    
+
     for pid, imgs in images.items():
+        clear_subcollection(db, pid, "images")
         coll = db.collection("patients").document(pid).collection("images")
-        for i in imgs:
-            coll.add(i)
+        for i, img in enumerate(imgs):
+            coll.document(str(i)).set(img)
         print(f"  ✓ {pid}: {len(imgs)} images")
 
 
 def seed_appointments(db):
-    """Seed patient appointments (previously hardcoded in patient_portal.py)."""
+    """Seed patient appointments."""
     appointments = {
         "P001": [
             {
@@ -252,11 +264,12 @@ def seed_appointments(db):
             }
         ]
     }
-    
+
     for pid, appts in appointments.items():
+        clear_subcollection(db, pid, "appointments")
         coll = db.collection("patients").document(pid).collection("appointments")
-        for a in appts:
-            coll.add(a)
+        for i, a in enumerate(appts):
+            coll.document(str(i)).set(a)
         print(f"  ✓ {pid}: {len(appts)} appointments")
 
 

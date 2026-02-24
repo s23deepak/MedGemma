@@ -1,0 +1,58 @@
+{
+  "event_categories": {
+    "respiratory_irritant": [
+      "wildfire",
+      "smoke",
+      "air quality",
+      "aqi",
+      "particulate",
+      "ozone",
+      "haze",
+      "chemical plume",
+      "industrial fire",
+      "respiratory alert"
+    ],
+    "infectious_outbreak": [
+      "outbreak",
+      "cluster",
+      "influenza",
+      "flu",
+      "covid",
+      "rsv",
+      "norovirus",
+      "dengue",
+      "measles",
+      "tuberculosis",
+      "public health alert"
+    ],
+    "heat_risk": [
+      "heatwave",
+      "extreme heat",
+      "heat advisory",
+      "heat index",
+      "heat illness"
+    ],
+    "water_contamination": [
+      "water contamination",
+      "boil water",
+      "water quality alert",
+      "legionella",
+      "waterborne"
+    ]
+  },
+  "symptom_to_categories": {
+    "cough": ["respiratory_irritant", "infectious_outbreak"],
+    "dyspnea": ["respiratory_irritant", "infectious_outbreak"],
+    "shortness of breath": ["respiratory_irritant", "infectious_outbreak"],
+    "wheezing": ["respiratory_irritant", "infectious_outbreak"],
+    "fever": ["infectious_outbreak"],
+    "chills": ["infectious_outbreak"],
+    "nausea": ["infectious_outbreak", "water_contamination", "heat_risk"],
+    "vomiting": ["infectious_outbreak", "water_contamination", "heat_risk"],
+    "diarrhea": ["infectious_outbreak", "water_contamination"],
+    "dizziness": ["heat_risk"],
+    "fatigue": ["infectious_outbreak", "heat_risk"],
+    "headache": ["heat_risk", "infectious_outbreak"],
+    "dehydration": ["heat_risk"]
+  }
+}

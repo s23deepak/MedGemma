@@ -1,5 +1,10 @@
 # Demo Images for MedGemma Clinical Assistant
 
+## Other Data Assets
+
+- `medical_dictionary_terms.json` — local fallback medical lexicon for trend correlation
+- `medical_vocab_cache.json` — local cache of externally enriched medical vocabulary (auto-generated)
+
 ## Sample Medical Images
 
 For the demo, you can download sample chest X-ray images from:

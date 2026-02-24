@@ -1,0 +1,1154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <meta name="description" content="Resident training simulation — practice clinical reasoning with AI patients and tutor feedback across emergency, surgical, and medical cases.">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clinical Simulation Lab | MedGemma</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        /* ── Layout ── */
+        body { font-family: 'Inter', sans-serif; }
+        .sim-wrapper { max-width: 1400px; margin: 0 auto; padding: 1.5rem 2rem 3rem; }
+
+        /* ── Screen switching ── */
+        .screen { display: none; }
+        .screen.active { display: block; }
+
+        /* ── Landing ── */
+        .landing-header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding-top: 1rem;
+        }
+        .landing-header h1 {
+            font-size: 2.4rem;
+            font-weight: 800;
+            letter-spacing: -0.04em;
+            background: linear-gradient(135deg, var(--primary) 0%, #7c3aed 60%, #06b6d4 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+        }
+        .landing-header p { color: var(--text-secondary); font-size: 1rem; max-width: 480px; margin: 0 auto; }
+
+        .resident-row {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+            max-width: 480px;
+            margin: 0 auto 3rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.6rem 0.6rem 0.6rem 1.1rem;
+            box-shadow: var(--shadow-sm);
+        }
+        .resident-row input {
+            flex: 1;
+            border: none;
+            background: transparent;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.95rem;
+            outline: none;
+        }
+        .resident-row input::placeholder { color: var(--text-muted); }
+
+        .case-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.25rem;
+        }
+        @keyframes cardFadeIn {
+            from { opacity: 0; transform: translateY(12px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        .case-card {
+            background: var(--bg-secondary);
+            border: 1.5px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+            overflow: hidden;
+            animation: cardFadeIn 0.4s var(--ease-out, cubic-bezier(0.16,1,0.3,1)) both;
+            box-shadow: var(--shadow-sm, 0 1px 4px rgba(0,0,0,0.06));
+        }
+        .case-card::after {
+            content: 'Start →';
+            position: absolute;
+            bottom: 1rem; right: 1rem;
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: var(--primary, #2563eb);
+            opacity: 0;
+            transform: translateX(6px);
+            transition: all 0.2s;
+        }
+        .case-card:hover {
+            border-color: var(--primary, #2563eb);
+            box-shadow: 0 8px 24px rgba(37,99,235,0.14);
+            transform: translateY(-3px);
+        }
+        .case-card:hover::after { opacity: 1; transform: translateX(0); }
+        .case-card .case-badge {
+            display: inline-flex;
+            gap: 0.4rem;
+            margin-bottom: 0.85rem;
+        }
+        .badge {
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 0.18rem 0.55rem;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .badge-specialty { background: #e0f2fe; color: #0369a1; }
+        .badge-beginner  { background: #dcfce7; color: #15803d; }
+        .badge-intermediate { background: #fef9c3; color: #92400e; }
+        .badge-advanced  { background: #fee2e2; color: #991b1b; }
+        .case-card h3 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin-bottom: 0.55rem;
+            color: var(--text-primary);
+            letter-spacing: -0.01em;
+        }
+        .case-card ul  { padding-left: 1rem; color: var(--text-secondary); font-size: 0.82rem; }
+        .case-card ul li { margin-bottom: 0.2rem; }
+
+        /* ── Simulation layout ── */
+        .sim-layout {
+            display: grid;
+            grid-template-columns: 340px 1fr 280px;
+            gap: 1.25rem;
+            align-items: start;
+        }
+
+        .panel {
+            background: var(--bg-secondary);
+            border-radius: 14px;
+            border: 1px solid rgba(226,232,240,0.8);
+            overflow: hidden;
+            box-shadow: var(--shadow-sm, 0 1px 4px rgba(0,0,0,0.06));
+        }
+        .panel-header {
+            padding: 0.85rem 1.25rem;
+            border-bottom: 1px solid var(--border);
+            font-weight: 700;
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: linear-gradient(to right, rgba(248,250,252,0.9), rgba(255,255,255,0));
+        }
+        .panel-body { padding: 1.25rem; }
+
+        /* ── Vitals card ── */
+        .vitals-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .vital-item {
+            background: var(--bg-primary);
+            border-radius: 10px;
+            padding: 0.6rem 0.5rem;
+            text-align: center;
+            border: 1px solid var(--border);
+            transition: all 0.15s;
+        }
+        .vital-item:hover { border-color: rgba(37,99,235,0.3); background: rgba(37,99,235,0.02); }
+        .vital-label {
+            font-size: 0.62rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-secondary);
+        }
+        .vital-value {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-top: 0.15rem;
+            font-variant-numeric: tabular-nums;
+        }
+        .vital-value.abnormal {
+            color: #dc2626;
+            text-shadow: 0 0 8px rgba(220,38,38,0.2);
+        }
+
+        .presentation-text {
+            font-size: 0.88rem;
+            line-height: 1.7;
+            color: var(--text-primary);
+        }
+
+        /* ── Chat panel ── */
+        .chat-messages {
+            height: 320px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+            padding-bottom: 0.5rem;
+        }
+        .msg { max-width: 88%; }
+        .msg-resident { align-self: flex-end; }
+        .msg-patient  { align-self: flex-start; }
+        .msg-bubble {
+            padding: 0.6rem 0.95rem;
+            border-radius: 18px;
+            font-size: 0.85rem;
+            line-height: 1.55;
+        }
+        .msg-resident .msg-bubble {
+            background: linear-gradient(135deg, var(--primary, #2563eb), #1d4ed8);
+            color: white;
+            border-bottom-right-radius: 4px;
+            box-shadow: 0 2px 8px rgba(37,99,235,0.25);
+        }
+        .msg-patient .msg-bubble {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            border-bottom-left-radius: 4px;
+            border: 1px solid var(--border);
+        }
+        .msg-label { font-size: 0.68rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.15rem; text-transform: uppercase; letter-spacing: 0.04em; }
+        .msg-resident .msg-label { text-align: right; }
+
+        .chat-input-row {
+            display: flex;
+            gap: 0.4rem;
+            margin-top: 0.75rem;
+        }
+        .chat-input-row input {
+            flex: 1;
+            padding: 0.6rem 0.9rem;
+            border: 1px solid var(--border);
+            border-radius: 9999px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.85rem;
+            transition: border-color 0.15s;
+        }
+        .chat-input-row input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+
+        /* ── Tabs ── */
+        .tab-bar {
+            display: flex;
+            gap: 0.15rem;
+            padding: 0.65rem 1rem 0;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+        }
+        .tab-btn {
+            padding: 0.45rem 0.9rem;
+            border-radius: 8px 8px 0 0;
+            border: none;
+            background: transparent;
+            font-family: inherit;
+            font-size: 0.82rem;
+            font-weight: 500;
+            cursor: pointer;
+            color: var(--text-secondary);
+            transition: all 0.15s;
+        }
+        .tab-btn:hover { color: var(--text-primary); }
+        .tab-btn.active {
+            background: var(--bg-primary);
+            color: var(--primary);
+            font-weight: 700;
+            box-shadow: inset 0 -2px 0 var(--primary);
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* ── Exam / Investigation grids ── */
+        .system-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.6rem;
+        }
+        .system-btn {
+            padding: 0.7rem;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--bg-primary);
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 0.82rem;
+            text-align: left;
+            color: var(--text-primary);
+            transition: all 0.15s;
+            font-weight: 500;
+        }
+        .system-btn:hover { border-color: var(--primary); background: rgba(37,99,235,0.04); transform: translateY(-1px); }
+        .system-btn.done { border-color: #22c55e; background: #f0fdf4; color: #15803d; font-weight: 600; }
+
+        .inv-input-row {
+            display: flex;
+            gap: 0.4rem;
+            margin-bottom: 0.75rem;
+        }
+        .inv-input-row input {
+            flex: 1;
+            padding: 0.6rem 0.9rem;
+            border: 1px solid var(--border);
+            border-radius: 9999px;
+            font-family: inherit;
+            font-size: 0.85rem;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            transition: border-color 0.15s;
+        }
+        .inv-input-row input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+        .quick-invs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; }
+        .quick-inv-btn {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.65rem;
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            background: var(--bg-primary);
+            cursor: pointer;
+            font-family: inherit;
+            color: var(--text-secondary);
+            transition: all 0.15s;
+            font-weight: 500;
+        }
+        .quick-inv-btn:hover { background: var(--primary); color: white; border-color: var(--primary); transform: translateY(-1px); }
+        .quick-inv-btn.done  { background: #dcfce7; color: #15803d; border-color: #86efac; }
+
+        .result-item {
+            background: var(--bg-primary);
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            margin-bottom: 0.5rem;
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--primary);
+        }
+        .result-name { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); margin-bottom: 0.3rem; }
+        .result-value { font-size: 0.88rem; color: var(--text-primary); line-height: 1.55; }
+
+        /* ── Notes panel ── */
+        .notes-area {
+            width: 100%;
+            min-height: 200px;
+            padding: 0.8rem;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--bg-primary);
+            font-family: inherit;
+            font-size: 0.85rem;
+            color: var(--text-primary);
+            resize: vertical;
+            transition: border-color 0.15s;
+        }
+        .notes-area:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+
+        /* ── Submit section ── */
+        .submit-section {
+            background: var(--bg-secondary);
+            border: 1px solid rgba(226,232,240,0.8);
+            border-radius: 16px;
+            padding: 1.75rem;
+            margin-top: 1.25rem;
+            box-shadow: var(--shadow-sm);
+            position: relative;
+            overflow: hidden;
+        }
+        .submit-section::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary), #7c3aed);
+        }
+        .submit-section h3 { font-size: 1rem; font-weight: 700; margin-bottom: 1.25rem; color: var(--text-primary); }
+        .field-group { margin-bottom: 1rem; }
+        .field-group label {
+            display: block;
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            margin-bottom: 0.4rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .field-group input, .field-group textarea {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 1.5px solid var(--border);
+            border-radius: 10px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.9rem;
+            box-sizing: border-box;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .field-group input:focus, .field-group textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+        }
+        .field-group textarea { min-height: 120px; resize: vertical; }
+        .mgmt-hint { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.3rem; font-style: italic; }
+
+        /* ── Results screen ── */
+        .score-hero {
+            text-align: center;
+            padding: 2.5rem 2rem;
+            background: linear-gradient(135deg, rgba(37,99,235,0.04) 0%, rgba(124,58,237,0.04) 50%, rgba(6,182,212,0.04) 100%);
+            border-radius: 16px;
+            border: 1px solid rgba(226,232,240,0.8);
+            margin-bottom: 1.5rem;
+            position: relative;
+            overflow: hidden;
+            box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.08));
+        }
+        .score-hero::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--primary), #7c3aed, #06b6d4);
+        }
+        .score-number {
+            font-size: 4rem;
+            font-weight: 800;
+            letter-spacing: -0.04em;
+            background: linear-gradient(135deg, var(--primary) 0%, #7c3aed 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1;
+        }
+        .score-label  { font-size: 0.9rem; color: var(--text-secondary); margin-top: 0.35rem; }
+        .grade-badge  {
+            display: inline-block;
+            font-size: 0.88rem;
+            font-weight: 700;
+            padding: 0.4rem 1.4rem;
+            border-radius: 20px;
+            margin-top: 0.65rem;
+            letter-spacing: 0.02em;
+        }
+        .grade-Excellent     { background: #dcfce7; color: #15803d; box-shadow: 0 2px 8px rgba(21,128,61,0.15); }
+        .grade-Satisfactory  { background: #dbeafe; color: #1d4ed8; box-shadow: 0 2px 8px rgba(29,78,216,0.12); }
+        .grade-Borderline    { background: #fef9c3; color: #92400e; box-shadow: 0 2px 8px rgba(146,64,14,0.12); }
+        .grade-Unsatisfactory { background: #fee2e2; color: #991b1b; box-shadow: 0 2px 8px rgba(153,27,27,0.12); }
+
+        .domain-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .domain-card {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.1rem 1rem;
+            text-align: center;
+            border: 1px solid var(--border);
+            transition: all 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+        .domain-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: var(--primary);
+            opacity: 0.6;
+        }
+        .domain-card:nth-child(1)::before { background: #2563eb; }
+        .domain-card:nth-child(2)::before { background: #7c3aed; }
+        .domain-card:nth-child(3)::before { background: #06b6d4; }
+        .domain-card:nth-child(4)::before { background: #10b981; }
+        .domain-card:nth-child(5)::before { background: #f59e0b; }
+        .domain-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+        .domain-name {
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+        .domain-score { font-size: 1.8rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.03em; }
+        .domain-fb { font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.4rem; line-height: 1.45; }
+
+        .feedback-block {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+            transition: box-shadow 0.15s;
+        }
+        .feedback-block:hover { box-shadow: var(--shadow-md); }
+        .feedback-block h4 { font-size: 0.88rem; font-weight: 700; margin-bottom: 0.75rem; color: var(--text-primary); }
+        .feedback-block pre { white-space: pre-wrap; font-family: inherit; font-size: 0.875rem; line-height: 1.7; color: var(--text-primary); }
+        .learning-point {
+            display: flex;
+            gap: 0.6rem;
+            padding: 0.65rem 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.87rem;
+            color: var(--text-primary);
+            line-height: 1.55;
+        }
+        .learning-point:last-child { border-bottom: none; }
+        .lp-icon { color: var(--primary); flex-shrink: 0; font-weight: 800; margin-top: 1px; }
+
+        /* ── Shared ── */
+        .btn-primary {
+            padding: 0.75rem 1.75rem;
+            background: linear-gradient(135deg, var(--primary, #2563eb), #1d4ed8);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-family: inherit;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            box-shadow: 0 4px 14px rgba(37,99,235,0.3);
+        }
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(37,99,235,0.38);
+        }
+        .btn-primary:active { transform: translateY(0); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .btn-outline {
+            padding: 0.6rem 1.25rem;
+            background: transparent;
+            color: var(--primary);
+            border: 1.5px solid var(--primary);
+            border-radius: 10px;
+            font-family: inherit;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-outline:hover {
+            background: rgba(37,99,235,0.07);
+            transform: translateY(-1px);
+        }
+        .btn-sm { padding: 0.45rem 0.9rem; font-size: 0.82rem; border-radius: 8px; }
+        .spinner { display: none; font-size: 0.82rem; color: var(--text-secondary); margin-left: 0.6rem; }
+        .spinner.show { display: inline; }
+        .sim-topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.25rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 2px solid var(--border);
+        }
+        .sim-topbar h2 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: -0.02em;
+        }
+        .timer {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            padding: 0.3rem 0.75rem;
+            border-radius: 20px;
+        }
+    </style>
+</head>
+<body>
+<header class="app-header">
+    <div class="header-left">
+        <a href="/" class="logo" style="text-decoration:none;">
+            <span class="logo-icon">⚕</span>
+            <span class="logo-text">MedGemma</span>
+        </a>
+        <div class="nav-links">
+            <a href="/">Encounters</a>
+            <a href="/history">Patient History</a>
+            <a href="/compliance">Compliance</a>
+            <a href="/council">Diagnostic Council</a>
+            <a href="/patient-portal">Patient Portal</a>
+            <a href="/ai-portal">AI Chat Portal</a>
+            <a href="/shift-brief">Shift Brief</a>
+            <a href="/simulation" class="active">Simulation</a>
+        </div>
+    </div>
+    <div class="nav-user">
+        <span>👤 Resident</span>
+    </div>
+</header>
+
+<div class="sim-wrapper">
+
+    <!-- ══════════════════ SCREEN 1: LANDING ══════════════════ -->
+    <div id="screen-landing" class="screen active">
+        <div class="landing-header">
+            <h1>Clinical Simulation Lab</h1>
+            <p>Practice clinical reasoning with AI-powered patient interactions and expert feedback</p>
+        </div>
+
+        <div class="resident-row">
+            <input type="text" id="residentName" placeholder="Your name (e.g. Dr. Smith)" />
+            <button class="btn-primary btn-sm" onclick="loadCases()">Continue</button>
+        </div>
+
+        <div id="caseGrid" class="case-grid" style="display:none;"></div>
+    </div>
+
+    <!-- ══════════════════ SCREEN 2: SIMULATION ══════════════════ -->
+    <div id="screen-sim" class="screen">
+        <div class="sim-topbar">
+            <div>
+                <h2 id="simTitle">Case Title</h2>
+                <span id="simMeta" style="font-size:0.82rem;color:var(--text-secondary);"></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:1rem;">
+                <span class="timer">Elapsed: <strong id="timerDisplay">00:00</strong></span>
+            </div>
+        </div>
+
+        <div class="sim-layout">
+
+            <!-- LEFT: Patient chat -->
+            <div>
+                <div class="panel" style="margin-bottom:1.25rem;">
+                    <div class="panel-header">🩺 Case Presentation</div>
+                    <div class="panel-body">
+                        <div class="vitals-grid" id="vitalsGrid"></div>
+                        <p class="presentation-text" id="presentationText"></p>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-header">💬 History Taking
+                        <span class="spinner" id="chatSpinner">Thinking…</span>
+                    </div>
+                    <div class="panel-body">
+                        <div class="chat-messages" id="chatMessages">
+                            <div class="msg msg-patient">
+                                <div class="msg-label">Patient</div>
+                                <div class="msg-bubble">Hello, doctor. I'm not feeling well at all. Please help me.</div>
+                            </div>
+                        </div>
+                        <div class="chat-input-row">
+                            <input type="text" id="historyInput"
+                                   placeholder="Ask the patient a question…"
+                                   onkeydown="if(event.key==='Enter') askHistory()" />
+                            <button class="btn-primary btn-sm" onclick="askHistory()">Ask</button>
+                        </div>
+                        <div style="margin-top:0.6rem;display:flex;flex-wrap:wrap;gap:0.4rem;" id="quickQuestions"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CENTRE: Exam + Investigations -->
+            <div>
+                <div class="panel">
+                    <div class="tab-bar">
+                        <button class="tab-btn active" onclick="switchTab('exam')">Physical Exam</button>
+                        <button class="tab-btn" onclick="switchTab('inv')">Investigations</button>
+                        <button class="tab-btn" onclick="switchTab('results')">Results (<span id="resultCount">0</span>)</button>
+                    </div>
+
+                    <!-- Exam tab -->
+                    <div id="tab-exam" class="tab-content active" style="padding:1.25rem;">
+                        <p style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:1rem;">
+                            Select a system to examine. Findings will be revealed.
+                        </p>
+                        <div class="system-grid" id="systemGrid"></div>
+                        <div id="examResult" style="margin-top:1rem;display:none;" class="result-item">
+                            <div class="result-name" id="examResultName"></div>
+                            <div class="result-value" id="examResultValue"></div>
+                        </div>
+                    </div>
+
+                    <!-- Investigation order tab -->
+                    <div id="tab-inv" class="tab-content" style="padding:1.25rem;">
+                        <div class="inv-input-row">
+                            <input type="text" id="invInput" placeholder="Type investigation name…"
+                                   onkeydown="if(event.key==='Enter') orderInvestigation()" />
+                            <button class="btn-primary btn-sm" onclick="orderInvestigation()">Order</button>
+                        </div>
+                        <p style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:0.75rem;">Quick orders:</p>
+                        <div class="quick-invs" id="quickInvs"></div>
+                    </div>
+
+                    <!-- Results tab -->
+                    <div id="tab-results" class="tab-content" style="padding:1.25rem;">
+                        <div id="resultsList">
+                            <p style="color:var(--text-secondary);font-size:0.88rem;">No results yet. Order investigations above.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RIGHT: Notes -->
+            <div>
+                <div class="panel">
+                    <div class="panel-header">📋 Your Notes</div>
+                    <div class="panel-body">
+                        <textarea class="notes-area" id="notesArea" placeholder="Jot clinical notes here…"></textarea>
+                        <div style="margin-top:0.75rem;font-size:0.78rem;color:var(--text-secondary);">
+                            <strong>Learning objectives:</strong>
+                            <ul id="objectivesList" style="padding-left:1.1rem;margin-top:0.4rem;line-height:1.7;"></ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Submit diagnosis + management -->
+        <div class="submit-section">
+            <h3>📝 Clinical Assessment & Management Plan</h3>
+            <div style="display:grid;grid-template-columns:1fr 2fr;gap:1.5rem;">
+                <div class="field-group">
+                    <label>Working Diagnosis</label>
+                    <input type="text" id="diagnosisInput" placeholder="Your primary diagnosis…" />
+                </div>
+                <div class="field-group">
+                    <label>Management Plan</label>
+                    <textarea id="managementInput"
+                        placeholder="List your management steps, one per line or comma-separated…
+e.g.
+Activate cath lab
+Aspirin 300mg + Ticagrelor 180mg
+IV heparin bolus
+…"></textarea>
+                    <div class="mgmt-hint">Tip: Be specific — drug names, doses, timing, escalation.</div>
+                </div>
+            </div>
+            <button class="btn-primary" onclick="submitAssessment()" id="submitBtn">
+                Submit for Feedback
+            </button>
+            <span class="spinner" id="submitSpinner">Scoring your performance…</span>
+        </div>
+    </div>
+
+    <!-- ══════════════════ SCREEN 3: RESULTS ══════════════════ -->
+    <div id="screen-results" class="screen">
+        <div class="sim-topbar">
+            <h2 id="resultsTitle">Case Debrief</h2>
+            <button class="btn-outline" onclick="goToLanding()">Try Another Case</button>
+        </div>
+
+        <div class="score-hero">
+            <div class="score-number" id="scoreNumber">—</div>
+            <div class="score-label" id="scoreLabel">out of 100</div>
+            <div><span class="grade-badge" id="gradeBadge">—</span></div>
+            <div style="margin-top:0.75rem;font-size:0.85rem;color:var(--text-secondary);" id="scoreResidentName"></div>
+        </div>
+
+        <div class="domain-grid" id="domainGrid"></div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
+            <div>
+                <div class="feedback-block">
+                    <h4>🎯 Correct Diagnosis</h4>
+                    <p id="correctDiagnosis" style="font-size:0.9rem;color:var(--text-primary);"></p>
+                </div>
+                <div class="feedback-block">
+                    <h4>💊 Model Management Plan</h4>
+                    <div id="correctManagement" style="font-size:0.88rem;line-height:1.8;color:var(--text-primary);"></div>
+                </div>
+            </div>
+            <div>
+                <div class="feedback-block" id="aiFeedbackBlock" style="display:none;">
+                    <h4>🤖 MedGemma Tutor Feedback</h4>
+                    <pre id="aiFeedbackText"></pre>
+                </div>
+                <div class="feedback-block">
+                    <h4>📚 Key Learning Points</h4>
+                    <div id="learningPoints"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div><!-- /sim-wrapper -->
+
+<script>
+    // ── State ──────────────────────────────────────────────────────────────────
+    let sessionId = null;
+    let currentCase = null;
+    let timerInterval = null;
+    let elapsedSeconds = 0;
+    let orderedInvs = new Set();
+    let examedSystems = new Set();
+
+    const QUICK_QUESTIONS = [
+        "Tell me about your pain",
+        "When did it start?",
+        "Any other symptoms?",
+        "What medications do you take?",
+        "Any allergies?",
+        "Any past medical history?",
+        "Any family history?",
+        "Do you smoke or drink?",
+    ];
+
+    const EXAM_SYSTEMS = [
+        "General", "Cardiovascular", "Respiratory", "Abdomen",
+        "Neurological", "Extremities", "Skin", "Right leg", "Left leg",
+        "Facial exam", "Upper limbs", "Lower limbs",
+    ];
+
+    const QUICK_INVS = [
+        "ECG", "12-lead ECG", "CXR", "FBC", "U&E", "LFTs", "CRP",
+        "Troponin I", "ABG", "D-dimer", "CT head",
+        "CT Pulmonary Angiogram", "USS abdomen", "Blood ketones",
+        "Clotting", "Glucose", "HbA1c", "Echo (bedside)", "Urine dip",
+    ];
+
+    // ── Screen management ──────────────────────────────────────────────────────
+    function showScreen(id) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById('screen-' + id).classList.add('active');
+    }
+
+    // ── Landing ────────────────────────────────────────────────────────────────
+    async function loadCases() {
+        const name = document.getElementById('residentName').value.trim();
+        if (!name) { alert('Please enter your name first.'); return; }
+
+        const res = await fetch('/api/simulation/cases');
+        const cases = await res.json();
+
+        const grid = document.getElementById('caseGrid');
+        grid.innerHTML = '';
+        cases.forEach(c => {
+            const card = document.createElement('div');
+            card.className = 'case-card';
+            card.innerHTML = `
+                <div class="case-badge">
+                    <span class="badge badge-specialty">${c.specialty}</span>
+                    <span class="badge badge-${c.difficulty}">${c.difficulty}</span>
+                </div>
+                <h3>${c.title}</h3>
+                <ul>${c.learning_objectives.slice(0,3).map(o => `<li>${o}</li>`).join('')}</ul>
+            `;
+            card.onclick = () => startCase(c.case_id);
+            grid.appendChild(card);
+        });
+        grid.style.display = 'grid';
+    }
+
+    async function startCase(caseId) {
+        const name = document.getElementById('residentName').value.trim();
+        const res = await fetch('/api/simulation/start', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ resident_name: name, case_id: caseId }),
+        });
+        const data = await res.json();
+        sessionId = data.session_id;
+        currentCase = data;
+        initSimScreen(data);
+        showScreen('sim');
+        startTimer();
+    }
+
+    // ── Simulation screen setup ────────────────────────────────────────────────
+    function initSimScreen(data) {
+        document.getElementById('simTitle').textContent = data.case_title;
+        document.getElementById('simMeta').textContent = `${data.specialty} · ${data.difficulty}`;
+        document.getElementById('presentationText').textContent = data.presentation;
+
+        // Vitals
+        const vg = document.getElementById('vitalsGrid');
+        vg.innerHTML = '';
+        const ABNORMAL = ['HR','BP','RR','SpO2'];
+        Object.entries(data.initial_vitals).forEach(([k,v]) => {
+            const div = document.createElement('div');
+            div.className = 'vital-item';
+            div.innerHTML = `<div class="vital-label">${k}</div><div class="vital-value">${v}</div>`;
+            vg.appendChild(div);
+        });
+
+        // Quick questions
+        const qq = document.getElementById('quickQuestions');
+        qq.innerHTML = '';
+        QUICK_QUESTIONS.forEach(q => {
+            const btn = document.createElement('button');
+            btn.className = 'quick-inv-btn';
+            btn.textContent = q;
+            btn.onclick = () => {
+                document.getElementById('historyInput').value = q;
+                askHistory();
+            };
+            qq.appendChild(btn);
+        });
+
+        // Exam systems
+        const sg = document.getElementById('systemGrid');
+        sg.innerHTML = '';
+        EXAM_SYSTEMS.forEach(sys => {
+            const btn = document.createElement('button');
+            btn.className = 'system-btn';
+            btn.id = `sys-${sys.replace(/\s/g,'_')}`;
+            btn.textContent = sys;
+            btn.onclick = () => examSystem(sys);
+            sg.appendChild(btn);
+        });
+
+        // Quick invs
+        const qi = document.getElementById('quickInvs');
+        qi.innerHTML = '';
+        QUICK_INVS.forEach(inv => {
+            const btn = document.createElement('button');
+            btn.className = 'quick-inv-btn';
+            btn.id = `inv-${inv.replace(/\s/g,'_')}`;
+            btn.textContent = inv;
+            btn.onclick = () => {
+                document.getElementById('invInput').value = inv;
+                orderInvestigation();
+            };
+            qi.appendChild(btn);
+        });
+
+        // Learning objectives
+        const ol = document.getElementById('objectivesList');
+        ol.innerHTML = data.learning_objectives.map(o => `<li>${o}</li>`).join('');
+
+        // Reset results
+        orderedInvs = new Set();
+        examedSystems = new Set();
+        document.getElementById('resultsList').innerHTML =
+            '<p style="color:var(--text-secondary);font-size:0.88rem;">No results yet.</p>';
+        document.getElementById('resultCount').textContent = '0';
+        document.getElementById('chatMessages').innerHTML = `
+            <div class="msg msg-patient">
+                <div class="msg-label">Patient</div>
+                <div class="msg-bubble">Hello, doctor. I'm not feeling well at all. Please help me.</div>
+            </div>`;
+    }
+
+    // ── History taking ─────────────────────────────────────────────────────────
+    async function askHistory() {
+        const input = document.getElementById('historyInput');
+        const q = input.value.trim();
+        if (!q) return;
+        input.value = '';
+
+        appendMessage(q, 'resident');
+        document.getElementById('chatSpinner').classList.add('show');
+
+        const res = await fetch('/api/simulation/history', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ session_id: sessionId, question: q }),
+        });
+        const data = await res.json();
+        document.getElementById('chatSpinner').classList.remove('show');
+        appendMessage(data.response, 'patient');
+    }
+
+    function appendMessage(text, role) {
+        const container = document.getElementById('chatMessages');
+        const div = document.createElement('div');
+        div.className = `msg msg-${role}`;
+        div.innerHTML = `
+            <div class="msg-label">${role === 'resident' ? 'You (Doctor)' : 'Patient'}</div>
+            <div class="msg-bubble">${text}</div>
+        `;
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    // ── Examination ────────────────────────────────────────────────────────────
+    async function examSystem(system) {
+        const res = await fetch('/api/simulation/exam', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ session_id: sessionId, system }),
+        });
+        const data = await res.json();
+
+        const btn = document.getElementById(`sys-${system.replace(/\s/g,'_')}`);
+        if (btn) btn.classList.add('done');
+        examedSystems.add(system);
+
+        const er = document.getElementById('examResult');
+        er.style.display = 'block';
+        document.getElementById('examResultName').textContent = data.system;
+        document.getElementById('examResultValue').textContent = data.findings;
+
+        switchTab('exam');
+    }
+
+    // ── Investigations ─────────────────────────────────────────────────────────
+    async function orderInvestigation() {
+        const input = document.getElementById('invInput');
+        const inv = input.value.trim();
+        if (!inv) return;
+        input.value = '';
+
+        const res = await fetch('/api/simulation/investigate', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ session_id: sessionId, investigation: inv }),
+        });
+        const data = await res.json();
+
+        orderedInvs.add(data.investigation);
+        document.getElementById('resultCount').textContent = orderedInvs.size;
+
+        // Mark quick button as done
+        const btn = document.getElementById(`inv-${inv.replace(/\s/g,'_')}`);
+        if (btn) btn.classList.add('done');
+
+        // Add to results list
+        const list = document.getElementById('resultsList');
+        if (list.querySelector('p')) list.innerHTML = '';
+        const item = document.createElement('div');
+        item.className = 'result-item';
+        item.innerHTML = `<div class="result-name">${data.investigation}</div>
+                          <div class="result-value">${data.result}</div>`;
+        list.appendChild(item);
+
+        switchTab('results');
+    }
+
+    // ── Tabs ───────────────────────────────────────────────────────────────────
+    function switchTab(name) {
+        document.querySelectorAll('.tab-btn').forEach((b,i) => {
+            b.classList.toggle('active', ['exam','inv','results'][i] === name);
+        });
+        ['exam','inv','results'].forEach(t => {
+            document.getElementById(`tab-${t}`).classList.toggle('active', t === name);
+        });
+    }
+
+    // ── Submit ─────────────────────────────────────────────────────────────────
+    async function submitAssessment() {
+        const diagnosis = document.getElementById('diagnosisInput').value.trim();
+        const mgmtRaw = document.getElementById('managementInput').value.trim();
+        if (!diagnosis) { alert('Please enter your working diagnosis.'); return; }
+        if (!mgmtRaw)   { alert('Please enter your management plan.'); return; }
+
+        const management = mgmtRaw.split(/\n|,/).map(s => s.trim()).filter(Boolean);
+
+        document.getElementById('submitBtn').disabled = true;
+        document.getElementById('submitSpinner').classList.add('show');
+
+        const res = await fetch('/api/simulation/submit', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ session_id: sessionId, diagnosis, management }),
+        });
+        const score = await res.json();
+
+        document.getElementById('submitBtn').disabled = false;
+        document.getElementById('submitSpinner').classList.remove('show');
+
+        stopTimer();
+        renderResults(score);
+        showScreen('results');
+    }
+
+    // ── Results rendering ──────────────────────────────────────────────────────
+    function renderResults(score) {
+        const name = document.getElementById('residentName').value;
+        document.getElementById('resultsTitle').textContent = `Debrief — ${currentCase.case_title}`;
+        document.getElementById('scoreResidentName').textContent = `Resident: ${name}`;
+        document.getElementById('scoreNumber').textContent = score.percentage + '%';
+        document.getElementById('scoreLabel').textContent = `${score.total} / ${score.max_score} points`;
+
+        const gb = document.getElementById('gradeBadge');
+        gb.textContent = score.grade;
+        gb.className = `grade-badge grade-${score.grade}`;
+
+        // Domain cards
+        const dg = document.getElementById('domainGrid');
+        dg.innerHTML = '';
+        const domainNames = {
+            history: 'History Taking', exam: 'Examination',
+            investigations: 'Investigations', diagnosis: 'Diagnosis', management: 'Management',
+        };
+        Object.entries(score.domain_scores).forEach(([key, pts]) => {
+            const div = document.createElement('div');
+            div.className = 'domain-card';
+            div.innerHTML = `
+                <div class="domain-name">${domainNames[key] || key}</div>
+                <div class="domain-score">${pts}</div>
+                <div class="domain-fb">${score.domain_feedback[key] || ''}</div>
+            `;
+            dg.appendChild(div);
+        });
+
+        // Correct diagnosis
+        document.getElementById('correctDiagnosis').textContent = score.correct_diagnosis;
+
+        // Correct management
+        const cm = document.getElementById('correctManagement');
+        cm.innerHTML = score.correct_management.map(m => `✓ ${m}`).join('<br>');
+
+        // AI feedback
+        if (score.ai_feedback) {
+            document.getElementById('aiFeedbackBlock').style.display = 'block';
+            document.getElementById('aiFeedbackText').textContent = score.ai_feedback;
+        }
+
+        // Learning points
+        const lp = document.getElementById('learningPoints');
+        lp.innerHTML = (score.key_learning_points || []).map(p =>
+            `<div class="learning-point"><span class="lp-icon">→</span><span>${p}</span></div>`
+        ).join('');
+    }
+
+    // ── Timer ──────────────────────────────────────────────────────────────────
+    function startTimer() {
+        elapsedSeconds = 0;
+        if (timerInterval) clearInterval(timerInterval);
+        timerInterval = setInterval(() => {
+            elapsedSeconds++;
+            const m = String(Math.floor(elapsedSeconds / 60)).padStart(2,'0');
+            const s = String(elapsedSeconds % 60).padStart(2,'0');
+            document.getElementById('timerDisplay').textContent = `${m}:${s}`;
+        }, 1000);
+    }
+
+    function stopTimer() {
+        if (timerInterval) clearInterval(timerInterval);
+    }
+
+    function goToLanding() {
+        stopTimer();
+        sessionId = null;
+        currentCase = null;
+        showScreen('landing');
+        document.getElementById('diagnosisInput').value = '';
+        document.getElementById('managementInput').value = '';
+    }
+</script>
+<footer class="app-footer" style="margin-top:2rem;">
+    <span>MedGemma Clinical Simulation Lab</span>
+    <span class="separator">•</span>
+    <span>Powered by Google Health AI Developer Foundations</span>
+</footer>
+</body>
+</html>

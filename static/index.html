@@ -3,6 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MedGemma Clinical Assistant</title>
     <meta name="description" content="AI-powered clinical decision support with MedGemma and MedASR">
@@ -28,6 +29,8 @@
                     <a href="/council">Diagnostic Council</a>
                     <a href="/patient-portal">Patient Portal</a>
                     <a href="/ai-portal">AI Chat Portal</a>
+                    <a href="/shift-brief">Shift Brief</a>
+                    <a href="/simulation">Simulation</a>
                 </div>
             </div>
             <div class="header-right">
@@ -57,16 +60,23 @@
 
         <!-- Main Content -->
         <main class="main-content">
-            <!-- Patient Selection (Initial State) -->
-            <section class="patient-selection" id="patientSelection">
-                <div class="selection-card">
-                    <h1>Select Patient</h1>
-                    <p class="subtitle">Choose a patient to begin the clinical encounter</p>
-                    <div class="patient-list" id="patientList">
-                        <!-- Patients will be loaded here -->
-                    </div>
+        <!-- Patient Selection (Initial State) -->
+        <section class="patient-selection" id="patientSelection">
+            <div class="selection-card">
+                <h1>New Encounter</h1>
+                <p class="subtitle">Select a patient to begin an AI-assisted clinical encounter</p>
+                <!-- Feature badges -->
+                <div style="display:flex;flex-wrap:wrap;gap:0.5rem;justify-content:center;margin-bottom:1.75rem;">
+                    <span style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.3rem 0.75rem;border-radius:9999px;background:rgba(37,99,235,0.07);border:1px solid rgba(37,99,235,0.15);font-size:0.72rem;font-weight:600;color:#2563eb;">🧠 AI SOAP Notes</span>
+                    <span style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.3rem 0.75rem;border-radius:9999px;background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.15);font-size:0.72rem;font-weight:600;color:#059669;">🩻 Medical Imaging</span>
+                    <span style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.3rem 0.75rem;border-radius:9999px;background:rgba(124,58,237,0.07);border:1px solid rgba(124,58,237,0.15);font-size:0.72rem;font-weight:600;color:#7c3aed;">🎙️ Clinical Dictation</span>
+                    <span style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.3rem 0.75rem;border-radius:9999px;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.15);font-size:0.72rem;font-weight:600;color:#d97706;">📚 PubMed Evidence</span>
                 </div>
-            </section>
+                <div class="patient-list" id="patientList">
+                    <!-- Patients will be loaded here -->
+                </div>
+            </div>
+        </section>
 
             <!-- Clinical Encounter (Active State) -->
             <section class="clinical-encounter hidden" id="clinicalEncounter">

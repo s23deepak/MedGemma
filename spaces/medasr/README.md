@@ -22,3 +22,5 @@ This Space exposes an HTTP endpoint callable from any application.
 See `src/asr/medasr_streaming.py` in the MedGemma project for the client code.
 
 Set `MEDASR_SPACE_ID=your-username/medasr` in your `.env` to route transcription here.
+
+In the main MedGemma app, transcriptions can be combined with EHR location and local health trend context during SOAP generation.

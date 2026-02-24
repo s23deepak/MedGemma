@@ -37,7 +37,7 @@ Open **http://localhost:8000** in your browser.
 
 1. Open http://localhost:8000
 2. Verify the main page loads with navigation links
-3. Check that all nav links are visible: Encounters, History, Compliance, Council, Patient Portal, AI Chat Portal
+3. Check that all nav links are visible: Encounters, History, Compliance, Council, Patient Portal, AI Chat Portal, Shift Brief, Simulation
 
 ---
 
@@ -93,7 +93,24 @@ fetch('/api/encounters/SESSION_ID/generate-soap', {
 ```
 
 - Check that the response includes `pubmed_insights_status: "running"` (PubMed background task started)
+- Check that the response includes `local_trend_insights` (may be `null` when no matching signals)
 - Check the `📚 PubMed Literature` card appears in the right panel after a few seconds
+
+**Validate location-aware trend correlation:**
+
+1. Ensure a patient with location is selected (e.g., `P002` with `Miami` / Florida context in your seed data)
+2. Add transcription text with respiratory symptoms, for example:
+
+```javascript
+fetch('/api/encounters/SESSION_ID/transcription', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+  body: new URLSearchParams({text: 'Patient has cough and shortness of breath after smoke exposure'})
+}).then(r => r.json()).then(console.log)
+```
+
+3. Re-run `/generate-soap` and inspect `local_trend_insights` in response
+   - Should include `matched_signal_count`, `matched_signals`, and disclaimer text
 
 **Poll PubMed insights:**
 
@@ -401,6 +418,22 @@ fetch('/api/pubmed/validate-plan', {
 4. **DDI Monitor for a patient:**
    - `http://localhost:8000/api/pubmed/ddi-monitor/P001`
    - Pulls Sarah Wilson's medications from FHIR and scans for interactions
+
+---
+
+### 3.12 Shift Brief
+
+1. Go to: `http://localhost:8000/shift-brief`
+2. Select provider + role and click Generate
+3. Verify returned summary and patient cards load
+
+---
+
+### 3.13 Simulation
+
+1. Go to: `http://localhost:8000/simulation`
+2. Start a case and run through history/exam/investigation
+3. Submit diagnosis and confirm scored feedback appears
 
 ---
 

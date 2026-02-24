@@ -1376,3 +1376,551 @@ body {
     font-style: italic;
     font-size: 0.75rem;
 }
+
+/* ── Navbar alias (shift_brief, simulation pages) ───────────────────── */
+.navbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-md) var(--spacing-xl);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: var(--shadow-sm);
+}
+
+.navbar .nav-brand,
+.navbar .nav-content {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+.navbar .nav-brand a,
+.navbar .nav-content a.logo {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    text-decoration: none;
+}
+
+.nav-logo {
+    font-size: 1.4rem;
+}
+
+.navbar .nav-brand span:not(.nav-logo),
+.navbar .nav-content > span {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+/* ── Favicon inline SVG placeholder ─────────────────────────────────── */
+/* Favicon is served as /static/favicon.svg */
+
+/* ── Competition polish: enhanced visual hierarchy ───────────────────── */
+.app-header {
+    box-shadow: var(--shadow-sm);
+}
+
+/* Form inputs – global polish */
+input[type="text"],
+input[type="number"],
+input[type="email"],
+input[type="password"],
+select,
+textarea {
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+select:focus,
+textarea:focus {
+    outline: none;
+    border-color: var(--border-focus);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+/* Button polish */
+button:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+/* Card hover lift (base) */
+.card:hover {
+    box-shadow: var(--shadow-md);
+    transition: box-shadow var(--transition-fast);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   ██╗   ██╗██╗    ██████╗ ██╗   ██╗███████╗██████╗ ██╗  ██╗
+   ██║   ██║██║   ██╔═══██╗██║   ██║██╔════╝██╔══██╗██║ ██╔╝
+   ██║   ██║██║   ██║   ██║██║   ██║█████╗  ██████╔╝█████╔╝
+   ██║   ██║██║   ██║   ██║╚██╗ ██╔╝██╔══╝  ██╔══██╗██╔═██╗
+   ╚██████╔╝██║   ╚██████╔╝ ╚████╔╝ ███████╗██║  ██║██║  ██╗
+    ╚═════╝ ╚═╝    ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝
+   MedGemma — Competition UI Overhaul
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Enhanced design tokens ──────────────────────────────────── */
+:root {
+    /* Semantic ghost backgrounds */
+    --primary-ghost:  rgba(37,  99, 235, 0.07);
+    --success-ghost:  rgba(16, 185, 129, 0.08);
+    --warning-ghost:  rgba(245,158,  11, 0.08);
+    --danger-ghost:   rgba(239,  68,  68, 0.08);
+    --purple:         #7c3aed;
+    --purple-ghost:   rgba(124, 58, 237, 0.08);
+    --cyan:           #06b6d4;
+
+    /* Richer shadows (color-tinted) */
+    --shadow-xs:      0 1px 2px rgba(0,0,0,0.04);
+    --shadow-sm:      0 1px 4px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md:      0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+    --shadow-lg:      0 12px 28px rgba(0,0,0,0.10), 0 4px 8px rgba(0,0,0,0.06);
+    --shadow-xl:      0 24px 48px rgba(0,0,0,0.12);
+    --shadow-primary: 0 4px 14px rgba(37,99,235,0.30);
+    --shadow-success: 0 4px 14px rgba(16,185,129,0.25);
+
+    /* Smoother easing */
+    --ease-out:       cubic-bezier(0.16, 1, 0.3, 1);
+    --transition-fast:   150ms cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-slow:   400ms cubic-bezier(0.16, 1, 0.3, 1);
+
+    /* Tighter border radius */
+    --radius-xs:  0.2rem;
+    --radius-full: 9999px;
+}
+
+/* ── 2. Page background — subtle depth ───────────────────────────── */
+body {
+    background: linear-gradient(160deg, #f0f4ff 0%, #f8fafc 40%, #f1f5f9 100%);
+    background-attachment: fixed;
+}
+
+/* ── 3. Premium header / navbar ──────────────────────────────────── */
+.app-header,
+.navbar {
+    background: rgba(255,255,255,0.92);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(226,232,240,0.8);
+    box-shadow: 0 1px 0 rgba(0,0,0,0.04), 0 2px 8px rgba(0,0,0,0.04);
+}
+
+/* Blue top-accent stripe */
+.app-header::before,
+.navbar::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #2563eb 0%, #7c3aed 50%, #06b6d4 100%);
+}
+.app-header { position: sticky; top: 0; z-index: 100; overflow: visible; }
+.navbar     { position: sticky; top: 0; z-index: 100; overflow: visible; }
+
+/* Ensure relative positioning for the pseudo-element to work */
+.app-header, .navbar { position: sticky; }
+
+/* Logo redesign */
+.logo-icon, .nav-logo { font-size: 1.4rem; }
+.logo-text {
+    font-size: 1.2rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--purple) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* Nav links — pill active state */
+.nav-links a {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    padding: 0.4rem 0.85rem;
+    border-radius: var(--radius-full);
+    transition: all var(--transition-fast);
+    white-space: nowrap;
+}
+.nav-links a:hover {
+    color: var(--primary);
+    background: var(--primary-ghost);
+}
+.nav-links a.active {
+    color: var(--primary);
+    background: var(--primary-ghost);
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px rgba(37,99,235,0.2);
+}
+
+/* ── 4. Cards — elevated with hover lift ────────────────────────── */
+.card {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-xl);
+    border: 1px solid rgba(226,232,240,0.7);
+    box-shadow: var(--shadow-sm);
+    transition: box-shadow var(--transition-normal), transform var(--transition-normal);
+}
+.card:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+}
+.card-header {
+    border-bottom: 1px solid rgba(226,232,240,0.6);
+    background: linear-gradient(to right, rgba(248,250,252,0.8), rgba(255,255,255,0));
+}
+.card-header h2 {
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+/* ── 5. Buttons — richer, more confident ────────────────────────── */
+.btn {
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    border-radius: var(--radius-md);
+    transition: all var(--transition-fast);
+    position: relative;
+    overflow: hidden;
+}
+.btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: white;
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+}
+.btn:hover::after { opacity: 0.08; }
+.btn:active::after { opacity: 0.15; }
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+    box-shadow: var(--shadow-primary);
+    color: white;
+    border: none;
+}
+.btn-primary:hover {
+    background: linear-gradient(135deg, var(--primary-light) 0%, var(--primary) 100%);
+    box-shadow: 0 6px 20px rgba(37,99,235,0.35);
+    transform: translateY(-1px);
+}
+.btn-primary:active { transform: translateY(0); box-shadow: var(--shadow-primary); }
+
+.btn-success {
+    background: linear-gradient(135deg, var(--success) 0%, var(--success-dark) 100%);
+    box-shadow: var(--shadow-success);
+    color: white;
+    border: none;
+}
+.btn-success:hover {
+    box-shadow: 0 6px 20px rgba(16,185,129,0.35);
+    transform: translateY(-1px);
+}
+
+.btn-secondary {
+    background: var(--bg-secondary);
+    border: 1.5px solid var(--border);
+    color: var(--text-secondary);
+}
+.btn-secondary:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: var(--primary-ghost);
+    transform: translateY(-1px);
+}
+
+/* ── 6. Selection card (dashboard patient list) ──────────────────── */
+.selection-card {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-2xl);
+    padding: 2.5rem 2rem;
+    box-shadow: var(--shadow-xl);
+    max-width: 640px;
+    border: 1px solid rgba(226,232,240,0.5);
+}
+.selection-card::before {
+    content: '';
+    display: block;
+    width: 48px;
+    height: 4px;
+    background: linear-gradient(90deg, var(--primary), var(--purple));
+    border-radius: 2px;
+    margin: 0 auto 1.5rem;
+}
+.selection-card h1 {
+    font-size: 1.6rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    color: var(--text-primary);
+    margin-bottom: 0.4rem;
+}
+.subtitle {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin-bottom: 1.75rem;
+}
+
+/* Patient items */
+.patient-item {
+    border-radius: var(--radius-lg);
+    border: 1.5px solid var(--border);
+    background: var(--bg-tertiary);
+    transition: all var(--transition-normal);
+}
+.patient-item:hover {
+    border-color: var(--primary);
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow-md);
+    transform: translateX(4px);
+}
+.patient-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-full);
+    background: linear-gradient(135deg, var(--primary-light), var(--purple));
+    box-shadow: 0 2px 8px rgba(37,99,235,0.3);
+}
+
+/* ── 7. Status badges — polished pills ───────────────────────────── */
+.status-badge {
+    padding: 0.2rem 0.7rem;
+    border-radius: var(--radius-full);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+.status-badge.pending  { background: var(--bg-tertiary);  color: var(--text-muted); }
+.status-badge.generated { background: #dbeafe; color: var(--primary); }
+.status-badge.approved  { background: #d1fae5; color: var(--success-dark); box-shadow: 0 0 0 1px rgba(16,185,129,0.2); }
+
+/* Tag chips */
+.tag {
+    display: inline-block;
+    padding: 0.15rem 0.6rem;
+    border-radius: var(--radius-full);
+    font-size: 0.72rem;
+    font-weight: 500;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+}
+.tag.allergy {
+    background: var(--danger-ghost);
+    border-color: rgba(239,68,68,0.3);
+    color: var(--danger);
+}
+
+/* ── 8. Toast — slide in from bottom-right ───────────────────────── */
+.toast-container {
+    bottom: 1.5rem;
+    right: 1.5rem;
+}
+.toast {
+    padding: 0.9rem 1.25rem;
+    border-radius: var(--radius-lg);
+    background: var(--text-primary);
+    box-shadow: var(--shadow-lg);
+    font-size: 0.875rem;
+    font-weight: 500;
+    animation: toastIn 0.35s var(--ease-out);
+    min-width: 260px;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+.toast.success  { background: linear-gradient(135deg, var(--success), var(--success-dark)); }
+.toast.error    { background: linear-gradient(135deg, var(--danger), #b91c1c); }
+@keyframes toastIn {
+    from { transform: translateY(20px) scale(0.95); opacity: 0; }
+    to   { transform: translateY(0)    scale(1);    opacity: 1; }
+}
+
+/* ── 9. Modal — blurred backdrop ────────────────────────────────── */
+.modal-backdrop { background: rgba(0,0,0,0.4); backdrop-filter: blur(4px); }
+.modal-content  {
+    border-radius: var(--radius-2xl);
+    box-shadow: var(--shadow-xl);
+    border: 1px solid rgba(255,255,255,0.7);
+}
+
+/* ── 10. Recording indicator ────────────────────────────────────── */
+.recording-indicator {
+    background: linear-gradient(to right, var(--danger-ghost), transparent);
+    border-left: 3px solid var(--danger);
+}
+
+/* ── 11. Status indicator (header) ─────────────────────────────── */
+.status-indicator {
+    background: var(--success-ghost);
+    border: 1px solid rgba(16,185,129,0.2);
+    border-radius: var(--radius-full);
+    padding: 0.35rem 0.85rem;
+}
+.status-dot {
+    background: var(--success);
+    box-shadow: 0 0 6px rgba(16,185,129,0.6);
+}
+
+/* ── 12. Footer polish ───────────────────────────────────────────── */
+.app-footer {
+    background: var(--bg-secondary);
+    border-top: 1px solid rgba(226,232,240,0.6);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    padding: 0.85rem 2rem;
+    letter-spacing: 0.02em;
+}
+
+/* ── 13. SOAP section color bars ─────────────────────────────────── */
+.soap-section h3 {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding-bottom: 0.5rem;
+}
+.soap-section.subjective h3 { border-color: #8b5cf6; color: #8b5cf6; }
+.soap-section.objective  h3 { border-color: #06b6d4; color: #06b6d4; }
+.soap-section.assessment h3 { border-color: #f59e0b; color: #f59e0b; }
+.soap-section.plan       h3 { border-color: #22c55e; color: #22c55e; }
+
+/* ── 14. Image upload zone ───────────────────────────────────────── */
+.image-upload-area {
+    border-radius: var(--radius-lg);
+    border: 2px dashed rgba(37,99,235,0.25);
+    background: linear-gradient(135deg, rgba(37,99,235,0.02), rgba(124,58,237,0.02));
+    transition: all var(--transition-normal);
+}
+.image-upload-area:hover {
+    border-color: var(--primary);
+    background: var(--primary-ghost);
+}
+
+/* ── 15. Model status chips ──────────────────────────────────────── */
+.model-chip.awake {
+    background: linear-gradient(135deg, rgba(16,185,129,0.12), rgba(16,185,129,0.06));
+    border: 1px solid rgba(16,185,129,0.3);
+    color: var(--success-dark);
+}
+
+/* ── 16. Scrollbar polish ────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ── 17. Skeleton loaders ────────────────────────────────────────── */
+@keyframes shimmer {
+    0%   { background-position: -400px 0; }
+    100% { background-position:  400px 0; }
+}
+.skeleton {
+    background: linear-gradient(90deg, var(--bg-tertiary) 25%, rgba(255,255,255,0.8) 50%, var(--bg-tertiary) 75%);
+    background-size: 800px 100%;
+    animation: shimmer 1.6s infinite linear;
+    border-radius: var(--radius-sm);
+}
+.skeleton-text  { height: 0.875rem; margin-bottom: 0.5rem; }
+.skeleton-title { height: 1.25rem; width: 60%; margin-bottom: 0.75rem; }
+.skeleton-block { height: 80px; }
+
+/* ── 18. Loading spinner ─────────────────────────────────────────── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner-ring {
+    width: 20px; height: 20px;
+    border: 2px solid var(--border);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+}
+
+/* ── 19. Focus ring — accessibility ──────────────────────────────── */
+*:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-xs);
+}
+
+/* ── 20. Alerts card ─────────────────────────────────────────────── */
+.alerts-card {
+    background: linear-gradient(135deg, #fff1f1, #fff5f5);
+    border: 1.5px solid rgba(239,68,68,0.3);
+}
+.soap-critical-alerts {
+    border: 1.5px solid rgba(239,68,68,0.4);
+    border-radius: var(--radius-lg);
+}
+
+/* ── 21. Differential item confidence color ─────────────────────── */
+.confidence-badge {
+    border-radius: var(--radius-full);
+    font-size: 0.7rem;
+}
+
+/* ── 22. Patient card polish ─────────────────────────────────────── */
+.patient-name   { font-weight: 700; letter-spacing: -0.01em; }
+.patient-section-title {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+/* ── 23. btn-icon polish ─────────────────────────────────────────── */
+.btn-icon {
+    border-radius: var(--radius-md);
+    transition: all var(--transition-fast);
+    color: var(--text-muted);
+}
+.btn-icon:hover {
+    background: var(--primary-ghost);
+    color: var(--primary);
+}
+
+/* ── 24. Record button ───────────────────────────────────────────── */
+.btn-record {
+    border-radius: var(--radius-md);
+    border: 1.5px solid var(--border);
+    font-weight: 500;
+}
+.btn-record.recording {
+    background: linear-gradient(135deg, var(--danger), #b91c1c);
+    box-shadow: 0 4px 12px rgba(239,68,68,0.4);
+    animation: recordPulse 1.5s ease-in-out infinite;
+}
+@keyframes recordPulse {
+    0%, 100% { box-shadow: 0 4px 12px rgba(239,68,68,0.4); }
+    50%       { box-shadow: 0 4px 20px rgba(239,68,68,0.65); }
+}
+
+/* ── 25. PubMed card accent ──────────────────────────────────────── */
+#pubmedCard {
+    border-top: 2px solid #6366f1 !important;
+    background: linear-gradient(to bottom, rgba(99,102,241,0.03), transparent 40%);
+}
+
+/* ── 26. Responsive touch-ups ────────────────────────────────────── */
+@media (max-width: 1200px) {
+    .nav-links a { padding: 0.35rem 0.65rem; font-size: 0.75rem; }
+}
+@media (max-width: 768px) {
+    .selection-card { padding: 1.5rem; border-radius: var(--radius-xl); }
+    .app-footer     { padding: 0.75rem 1rem; }
+}
+
+/* ── END OF UI OVERHAUL ──────────────────────────────────────────── */

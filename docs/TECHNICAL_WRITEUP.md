@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-The **MedGemma Clinical Assistant** is an AI-powered clinical decision support system that integrates MedGemma for multimodal reasoning, speech recognition for physician dictation, and a FHIR-compatible EHR. It features imaging artifact detection, clinical correlation analysis, a multi-opinion Diagnostic Council backed by live PubMed literature, SOAP compliance monitoring, a patient-facing portal with safety guardrails, an AI Chat Portal with image annotation, and persistent patient memory powered by Mem0.
+The **MedGemma Clinical Assistant** is an AI-powered clinical decision support system that integrates MedGemma for multimodal reasoning, speech recognition for physician dictation, and a FHIR-compatible EHR. It features imaging artifact detection, clinical correlation analysis, location-aware public-health/environment trend correlation, a multi-opinion Diagnostic Council backed by live PubMed literature, SOAP compliance monitoring, a patient-facing portal with safety guardrails, an AI Chat Portal with image annotation, and persistent patient memory powered by Mem0.
 
 ---
 
@@ -29,6 +29,7 @@ The **MedGemma Clinical Assistant** is an AI-powered clinical decision support s
 │  • /api/memory/*        - Persistent patient memory (Mem0)          │
 │  • /api/pubmed/*        - PubMed search, zebra-hunt, EBM, DDI      │
 │  • /api/ai-portal/*     - Physician multimodal chat                 │
+│  • local trend pipeline  - Location-aware symptom context enrichment  │
 │  • /api/health          - System health check                       │
 │  • /ws/audio/*          - Audio streaming                           │
 └───────────────────────┬─────────────────────────────────────────────┘
@@ -74,6 +75,8 @@ The **MedGemma Clinical Assistant** is an AI-powered clinical decision support s
 | `function_gemma.py` | Lightweight 270M tool router |
 | `tools.py` | 10 function-calling tool definitions (includes `search_pubmed`) |
 | `clinical_correlation.py` | Imaging artifact detection & finding classification |
+| `src/trends/local_health_trends.py` | Location-aware trend fetch + symptom correlation |
+| `src/trends/external_vocab.py` | NLM MeSH enrichment + cache backend (Firestore/local) |
 
 **Memory Optimization:**
 - 4-bit NF4 quantization via BitsAndBytes
@@ -168,6 +171,14 @@ The **MedGemma Clinical Assistant** is an AI-powered clinical decision support s
 - Auto-recall past context during encounters
 - Category-based retrieval: diagnoses, allergies, medications, preferences
 - Graceful fallback when OPENAI_API_KEY is not set
+
+### 11. Local Trend Intelligence (`src/trends/`)
+
+- Location-anchored RSS retrieval with geo relevance filtering
+- Correlates local signals (outbreaks, smoke/air quality, heat, water events) with same-day symptoms
+- External medical vocabulary enrichment from NLM MeSH Lookup API
+- Shared cache support in Firestore (`system_cache/medical_vocab_mesh`) with local fallback
+- Optional semantic vector enrichment (`MEDICAL_VOCAB_VECTOR_BACKEND`)
 
 ### 11. Authentication (`src/auth/`)
 
@@ -268,6 +279,12 @@ Two demo patients:
 |--------|----------|-------------|
 | GET | `/api/health` | Health check with component status |
 
+### Trend Context
+
+| Flow | Location | Description |
+|------|----------|-------------|
+| Encounter SOAP generation | `/api/encounters/{id}/generate-soap` response | Includes `local_trend_insights` field with matched signals and non-diagnostic recommendation |
+
 ---
 
 ## Testing
@@ -324,6 +341,7 @@ Open http://localhost:8000 in browser.
 5. **RAG-Enhanced Memory** — Clinical guideline retrieval
 6. **Audit Logging** — Full compliance trail
 7. **PubMed Semantic Search** — Replace keyword-based intent detection with embeddings
+8. **Managed Vector Backend** — Optional Qdrant/Pinecone backend for cross-term semantic retrieval
 
 ---
 

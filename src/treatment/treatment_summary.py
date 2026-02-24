@@ -19,14 +19,17 @@ HIPAA Safe Harbor identifiers removed:
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.ehr.fhir_mock import MockFHIRServer
+
+logger = logging.getLogger(__name__)
 
 
 # ── Dataclasses ───────────────────────────────────────────────────────────────
@@ -229,16 +232,143 @@ class TreatmentSummaryService:
             soap_plan=plan,
         )
 
-        # 1. Persist full summary per patient
+        # 1. Persist full summary per patient (in-memory)
         if patient_id not in self.fhir.treatment_summaries:
             self.fhir.treatment_summaries[patient_id] = []
         self.fhir.treatment_summaries[patient_id].append(summary.to_dict())
 
-        # 2. Persist de-identified case
+        # 2. Persist de-identified case (in-memory)
         anon_case = self._anonymize(summary, patient_ctx)
         self.fhir.treatment_cases.append(anon_case.to_dict())
 
+        # 3. Persist to Firebase (patient history + embedded anon_case for later finalization)
+        self._write_to_firestore(summary, anon_case)
+
         return summary
+
+    def _write_to_firestore(self, summary: TreatmentSummary, anon_case: AnonymizedCase) -> None:
+        """Write treatment summary to patients/{patient_id}/treatment_summaries/{summary_id}."""
+        try:
+            from src.config.firebase_config import get_firestore_client, is_firebase_available
+            if not is_firebase_available():
+                return
+            db = get_firestore_client()
+            if db is None:
+                return
+            doc_data = {
+                **summary.to_dict(),
+                "anon_case": anon_case.to_dict(),
+                "finalized": False,
+            }
+            (
+                db.collection("patients")
+                .document(summary.patient_id)
+                .collection("treatment_summaries")
+                .document(summary.summary_id)
+                .set(doc_data)
+            )
+            logger.info(
+                f"Treatment summary {summary.summary_id} written to Firestore "
+                f"for patient {summary.patient_id}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to write treatment summary to Firestore: {e}")
+
+    # ── Hospital finalization (60-day rule) ───────────────────────────────────
+
+    def finalize_hospital_cases(self, days: int = 60) -> int:
+        """
+        Scan all patient treatment summaries in Firestore.
+
+        For each patient whose last encounter was more than `days` ago (default 60),
+        copy every un-finalized summary's anonymized case to the top-level
+        ``hospital_cases`` collection and mark the source document ``finalized=True``.
+
+        Returns the number of cases finalized in this run.
+        """
+        try:
+            from src.config.firebase_config import get_firestore_client, is_firebase_available
+            if not is_firebase_available():
+                return 0
+            db = get_firestore_client()
+            if db is None:
+                return 0
+        except Exception as e:
+            logger.warning(f"finalize_hospital_cases: Firebase unavailable — {e}")
+            return 0
+
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
+        finalized_count = 0
+
+        try:
+            patients_docs = db.collection("patients").stream()
+        except Exception as e:
+            logger.warning(f"finalize_hospital_cases: could not list patients — {e}")
+            return 0
+
+        for patient_doc in patients_docs:
+            patient_id = patient_doc.id
+            try:
+                summaries_ref = (
+                    db.collection("patients")
+                    .document(patient_id)
+                    .collection("treatment_summaries")
+                )
+                # Get all summaries for this patient, newest first
+                all_summaries = list(summaries_ref.order_by("created_at", direction="DESCENDING").stream())
+            except Exception as e:
+                logger.warning(f"finalize_hospital_cases: error reading summaries for {patient_id} — {e}")
+                continue
+
+            if not all_summaries:
+                continue
+
+            # Check if the most recent encounter was more than `days` ago
+            most_recent_doc = all_summaries[0].to_dict()
+            most_recent_str = most_recent_doc.get("created_at", "")
+            try:
+                # Parse ISO date; make timezone-aware if naive
+                most_recent_dt = datetime.fromisoformat(most_recent_str)
+                if most_recent_dt.tzinfo is None:
+                    most_recent_dt = most_recent_dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                continue
+
+            if most_recent_dt >= cutoff:
+                # Patient had a recent encounter — not eligible for finalization yet
+                continue
+
+            # Finalize all un-finalized summaries for this patient
+            for summary_doc in all_summaries:
+                data = summary_doc.to_dict()
+                if data.get("finalized"):
+                    continue  # already processed
+
+                anon_case_data = data.get("anon_case")
+                if not anon_case_data:
+                    continue
+
+                case_id = anon_case_data.get("case_id", f"AC-{uuid.uuid4().hex[:8].upper()}")
+                try:
+                    db.collection("hospital_cases").document(case_id).set({
+                        **anon_case_data,
+                        "source_summary_id": data.get("summary_id"),
+                        "finalized_at": datetime.now(tz=timezone.utc).isoformat(),
+                    })
+                    # Mark the source summary as finalized
+                    summaries_ref.document(summary_doc.id).update({"finalized": True})
+                    finalized_count += 1
+                    logger.info(
+                        f"Hospital case {case_id} finalized from summary "
+                        f"{data.get('summary_id')} (patient {patient_id})"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"finalize_hospital_cases: failed to finalize {case_id} — {e}"
+                    )
+
+        logger.info(f"finalize_hospital_cases: finalized {finalized_count} case(s)")
+        return finalized_count
 
     def get_summaries(self, patient_id: str) -> list[dict]:
         """Return all treatment summaries for a patient (newest first)."""

@@ -97,6 +97,7 @@ class PriorAuthRequest:
     denial_reason: str = ""
     approved_by: str = ""
     notes: str = ""
+    narrative: str = ""          # AI-generated medical necessity narrative
 
     def to_dict(self) -> dict:
         return {
@@ -116,6 +117,7 @@ class PriorAuthRequest:
             "denial_reason": self.denial_reason,
             "approved_by": self.approved_by,
             "notes": self.notes,
+            "narrative": self.narrative,
         }
 
 
@@ -299,6 +301,145 @@ class PriorAuthService:
             if req["auth_id"] == auth_id:
                 return req
         return None
+
+    # ── Narrative generation ──────────────────────────────────────────────────
+
+    def generate_narrative(
+        self,
+        pa_request: PriorAuthRequest,
+        patient_context: dict,
+        soap_note,
+        agent=None,
+    ) -> str:
+        """
+        Generate an AI medical-necessity narrative for insurance submission.
+
+        Falls back to a structured template when the agent is unavailable.
+        Attaches the narrative to the request's supporting_docs and sets the
+        ``narrative`` field in-place on the request object.
+        """
+        if agent is not None:
+            narrative = self._call_agent_narrative(pa_request, patient_context, soap_note, agent)
+        else:
+            narrative = self._structured_narrative(pa_request, patient_context, soap_note)
+
+        # Attach to the request
+        pa_request.narrative = narrative
+        # Also update the stored dict
+        for req in self.fhir.prior_auths.get(pa_request.patient_id, []):
+            if req["auth_id"] == pa_request.auth_id:
+                req["narrative"] = narrative
+                req["supporting_docs"] = [narrative] + req.get("supporting_docs", [])
+                break
+
+        # Persist to Firestore
+        self._write_narrative_to_firestore(pa_request.patient_id, pa_request.auth_id, narrative)
+        return narrative
+
+    def _call_agent_narrative(
+        self,
+        pa_request: PriorAuthRequest,
+        patient_context: dict,
+        soap_note,
+        agent,
+    ) -> str:
+        """Ask MedGemma to write the medical necessity narrative."""
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+
+        patient = patient_context.get("patient", {})
+        conditions = patient_context.get("conditions", [])
+        meds = patient_context.get("medications", [])
+        assessment = getattr(soap_note, "assessment", "") or pa_request.clinical_indication
+
+        cond_str = ", ".join(c.get("name", "") for c in conditions) if conditions else "See clinical notes"
+        med_str = ", ".join(m.get("name", "") for m in meds) if meds else "None"
+
+        prompt = (
+            f"Write a formal medical necessity narrative for an insurance prior authorization request.\n\n"
+            f"Service Requested: {pa_request.service_description}\n"
+            f"Service Type: {pa_request.service_type.value}\n"
+            f"Patient: {patient.get('age', '?')}y {patient.get('gender', '')}\n"
+            f"Active Conditions: {cond_str}\n"
+            f"Current Medications: {med_str}\n"
+            f"Clinical Indication: {assessment[:600]}\n\n"
+            f"Write a 2-3 paragraph narrative that:\n"
+            f"1. States the patient's relevant diagnoses and clinical history\n"
+            f"2. Explains why the requested service is medically necessary\n"
+            f"3. Describes the clinical benefit and consequences of denial\n"
+            f"Use formal, objective clinical language suitable for insurance review."
+        )
+        try:
+            result = agent.process_query(prompt)
+            return result.get("response", self._structured_narrative(pa_request, patient_context, soap_note))
+        except Exception as e:
+            _log.warning(f"Agent narrative generation failed: {e}")
+            return self._structured_narrative(pa_request, patient_context, soap_note)
+
+    @staticmethod
+    def _structured_narrative(
+        pa_request: PriorAuthRequest,
+        patient_context: dict,
+        soap_note,
+    ) -> str:
+        """Build a structured medical necessity narrative without AI."""
+        from datetime import datetime as _dt
+        patient = patient_context.get("patient", {})
+        conditions = patient_context.get("conditions", [])
+        meds = patient_context.get("medications", [])
+        assessment = getattr(soap_note, "assessment", "") or pa_request.clinical_indication
+
+        age = patient.get("age", "unknown")
+        gender = patient.get("gender", "patient")
+        cond_str = ", ".join(c.get("name", "") for c in conditions[:5]) if conditions else "active medical conditions"
+        med_str = ", ".join(m.get("name", "") for m in meds[:5]) if meds else "current medications"
+
+        lines = [
+            f"PRIOR AUTHORIZATION MEDICAL NECESSITY NARRATIVE",
+            f"Request ID: {pa_request.auth_id}",
+            f"Date: {_dt.now().strftime('%B %d, %Y')}",
+            f"Service: {pa_request.service_description} ({pa_request.service_type.value})",
+            f"Urgency: {pa_request.urgency.capitalize()}",
+            "",
+            f"PATIENT OVERVIEW",
+            f"This {age}-year-old {gender} presents with {cond_str}. "
+            f"Current medications include {med_str}.",
+            "",
+            f"CLINICAL INDICATION",
+            assessment[:800] if assessment else pa_request.clinical_indication,
+            "",
+            f"MEDICAL NECESSITY",
+            f"The requested {pa_request.service_description} is medically necessary to evaluate, "
+            f"diagnose, or manage the patient's condition(s). Without this service, the patient's "
+            f"clinical management would be compromised and appropriate treatment decisions cannot "
+            f"be made. Denial of this service may result in delayed diagnosis, disease progression, "
+            f"or adverse clinical outcomes.",
+            "",
+            f"This request is submitted in accordance with evidence-based clinical guidelines "
+            f"and the patient's individualized care plan.",
+        ]
+        return "\n".join(lines)
+
+    def _write_narrative_to_firestore(self, patient_id: str, auth_id: str, narrative: str) -> None:
+        """Update the PA request document in Firestore with the generated narrative."""
+        try:
+            from src.config.firebase_config import get_firestore_client, is_firebase_available
+            if not is_firebase_available():
+                return
+            db = get_firestore_client()
+            if db is None:
+                return
+            coll = (
+                db.collection("patients")
+                .document(patient_id)
+                .collection("prior_auth_requests")
+            )
+            docs = coll.where("auth_id", "==", auth_id).stream()
+            for doc in docs:
+                doc.reference.update({"narrative": narrative})
+        except Exception as e:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(f"Failed to persist PA narrative to Firestore: {e}")
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────

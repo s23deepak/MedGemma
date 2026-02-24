@@ -85,6 +85,10 @@ Click **Stop Recording**
 5. Click to expand it — show **rare diagnoses** and **citations** from actual PubMed articles
    - This is your key differentiator: real-time evidence grounding!
 
+6. **Call out local trend correlation in response JSON/UI context**
+   - Mention: “The assistant also correlates local health/environment trends with today’s symptoms.”
+   - Example narrative: “If wildfire smoke events occurred in Florida this week, respiratory symptoms are surfaced with exposure-aware context.”
+
 ---
 
 ### Act 6: Diagnostic Council (30 seconds)
@@ -131,9 +135,10 @@ Click **Stop Recording**
 2. **Multimodal understanding** — Image + voice + EHR context
 3. **Missed diagnosis detection** — The AI catches what might be overlooked
 4. **Live PubMed grounding** — Rare diagnoses backed by actual citations
-5. **Multi-opinion consensus** — Diagnostic Council with 5 independent analyses
-6. **Human-in-the-loop** — Doctor approval required before EHR update
-7. **Time savings** — Documentation generated automatically
+5. **Location-aware trend context** — Local outbreaks/environment events correlated to symptoms
+6. **Multi-opinion consensus** — Diagnostic Council with 5 independent analyses
+7. **Human-in-the-loop** — Doctor approval required before EHR update
+8. **Time savings** — Documentation generated automatically
 
 ---
 

@@ -287,6 +287,18 @@ class PatientAssistant:
                 except Exception as e:
                     logger.warning(f"Failed to fetch appointment for prompt: {e}")
             
+            # Inject Health Belief Model guidance
+            if patient_id:
+                try:
+                    from src.portal.hbm_profile import get_hbm_service
+                    _hbm = get_hbm_service()
+                    _profile = _hbm.load(patient_id)
+                    _guidance = _hbm.response_guidance(_profile)
+                    if _guidance:
+                        prompt_parts.append(_guidance + "\n\n")
+                except Exception as _e:
+                    logger.debug(f"HBM guidance skipped: {_e}")
+
             prompt_parts.append(f"Query category: {category.value}\n")
             prompt_parts.append(f"Patient question: {question}\n\n")
             prompt_parts.append("Provide a helpful, safe, and empathetic response:")
@@ -447,7 +459,16 @@ class PatientAssistant:
         response, requires_followup, references, ai_generated = self._generate_response(
             question, category, patient_context, patient_id=patient_id
         )
-        
+
+        # Update HBM profile from this message (non-blocking, non-fatal)
+        try:
+            from src.portal.hbm_profile import get_hbm_service
+            _hbm = get_hbm_service()
+            _profile = _hbm.load(patient_id)
+            _hbm.update_from_message(_profile, question)
+        except Exception:
+            pass
+
         query = PatientQuery(
             query_id=query_id,
             patient_id=patient_id,
