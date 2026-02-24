@@ -52,6 +52,35 @@ Query PubMed via NCBI E-utils in one of three clinical synthesis modes.
 - **Rate limiting**: 3 req/s by default; set `NCBI_API_KEY` env var for 10 req/s
 - **Non-blocking**: After SOAP generation, PubMed analysis runs as a FastAPI `BackgroundTask` and can be polled via `GET /api/encounters/{session_id}/pubmed-insights`
 
+### diagnostic_council
+Multi-rollout AI deliberation for consensus diagnosis via a LangGraph `StateGraph`.
+- **Input**: `symptoms` (list[str]), `patient_history` (str), `imaging_findings` (str), `vitals` (str), `num_rollouts` (int, default 5), `mode` ("standard" | "iterative")
+- **Output**: `CouncilDeliberation` (standard) or `IterativeDeliberation` (iterative)
+
+#### Deliberation Modes
+- **Standard**: Fans out `num_rollouts` parallel opinion nodes → calculates consensus → runs PubMed Zebra Hunt → returns result
+- **Iterative (Deep Dive)**: Same Round 1, then if PubMed returns rare diagnoses, fans out a second round with rare diagnoses injected into each opinion prompt → calculates R2 consensus → reports whether consensus shifted
+
+#### Graph Topology (`src/council/graph.py`)
+```
+START → initialize
+      → [Send×N] generate_r1_opinion  (parallel fan-out)
+            → calculate_consensus
+                  → run_pubmed
+                        ├─ [iterative + rare_dx] → [Send×N] generate_r2_opinion → calculate_r2_consensus → END
+                        └─ [standard | no rare_dx]                                                        → END
+```
+
+#### Implementation Details
+- **State**: `CouncilState(TypedDict)` with `Annotated[list[dict], operator.add]` reducers on `opinions` and `r2_opinions` to merge parallel branch outputs
+- **Parallel fan-out**: `Send` API dispatches N concurrent `generate_r1_opinion` nodes; each returns `{"opinions": [one_dict]}`; LangGraph merges via `operator.add`
+- **Two-node routing**: The same `_opinion_node` function is registered as both `"generate_r1_opinion"` (edges to `calculate_consensus`) and `"generate_r2_opinion"` (edges to `calculate_r2_consensus`) — distinct downstream routing without code duplication
+- **Agent capture**: `build_council_graph(agent, pubmed_agent)` factory captures references via closure; graph is lazily compiled and cached in `DiagnosticCouncil._graph`; cache is invalidated when agent or pubmed_agent is set after initial singleton creation
+- **API routes**: `POST /api/council/deliberate` (standard), `POST /api/council/iterative-deliberate` (Deep Dive)
+
+#### Context Engineering
+Each opinion prompt is stateless and compact (~300–400 tokens): only structured case fields + a JSON schema + urgency constraint. No cross-opinion conversation history is shared — each of the N rollouts sees only the raw case info, preventing anchoring bias. In Round 2, only rare diagnosis *names* (3–5 bullet points) are appended, not full PubMed abstracts. Token counting, truncation, and RAG are not currently needed because input fields (`symptoms`, `history`, `imaging`, `vitals`) are short strings; if expanded to full clinical notes, summarization/chunking would become necessary.
+
 ### local_health_trends (automatic context pipeline)
 The system automatically enriches encounters with location-aware trend context.
 - **Input source**: Patient location from EHR demographics
@@ -60,6 +89,42 @@ The system automatically enriches encounters with location-aware trend context.
 - **Caching**: In-memory + optional Firestore shared cache (`system_cache/medical_vocab_mesh`)
 - **Output**: Supportive `local_trend_insights` included in SOAP generation response
 - **Guardrail**: Trend context is non-diagnostic and always requires physician validation
+
+### generate_progress_note
+Generate a 24-hour SOAP progress note for an admitted inpatient.
+- **Input**: `patient_id` (string), optional `agent` for MedGemma narrative
+- **Output**: `note_text` (full SOAP), `todo_items` (list of outstanding tasks), `los_hours`, `source` (`medgemma` | `structured_fallback`)
+- **Fallback**: Structured note from EHR data when agent is unavailable
+
+### generate_sbar
+Generate a structured SBAR (Situation–Background–Assessment–Recommendation) shift handoff packet.
+- **Input**: `patient_id` (string)
+- **Output**:
+  - `sbar`: `{situation, background, assessment, recommendation, contingency_plans}`
+  - `completeness`: `{score, percentage, checks, missing_fields, warnings}` — 8-point rule audit covering code status, allergies, high-risk meds, active devices, contingency plan, sections present
+- **Completeness audit**: flags missing code status, unmentioned allergies, unflagged high-risk medications (insulin, anticoagulants, opioids, vasopressors), undocumented active devices (Foley, central line, ventilator)
+
+### run_safety_checks
+Rule-based inpatient safety watchlist checker.
+- **Input**: `patient_id` (string), optional `ward` filter
+- **Output**: List of `SafetyAlert` with fields: `alert_id`, `rule_id`, `severity` (`critical` | `warning`), `title`, `detail`, `suggested_action`, `ai_explanation`
+- **Rules implemented**:
+  1. VTE prophylaxis: admitted >24h with no order and no documented contraindication → CRITICAL
+  2. Foley catheter: dwell time >3 days without reassessment note in last 24h → WARNING
+  3. High-risk medication (vancomycin, aminoglycosides, insulin, metformin, NSAIDs) without renal function lab in last 48h → WARNING
+  4. No physician progress note in >24h → WARNING
+- **Dashboard**: `get_ward_safety_dashboard(ward)` aggregates alerts for all inpatients, sorted critical-first
+
+### generate_discharge_summary
+Generate a patient-friendly discharge summary with readmission risk assessment.
+- **Input**: `patient_id` (string), optional `soap_note` context
+- **Output**: `DischargeSummary` with: `why_admitted`, `what_was_done`, `medications` (with counseling notes), `follow_up_tasks`, `red_flag_symptoms`, `activity_restrictions`, `diet_instructions`, `missing_fields`, `readmission_risk` (`high` | `medium` | `low`), `readmission_risk_reasons`, `readmission_risk_explanation`
+- **Reading level**: 5th–6th grade when MedGemma agent is available
+- **MISSING enforcement**: Required fields not found in the record are explicitly marked `MISSING` so physicians cannot sign an incomplete document
+- **Risk binning**:
+  - HIGH: CHF, COPD, sepsis, CKD, prior admission in last 30 days, LOS >7 days
+  - MEDIUM: Diabetes, AF, stroke, post-surgical, polypharmacy (≥5 meds)
+  - LOW: No identified risk factors
 
 ## Safety Constraints
 

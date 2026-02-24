@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inpatient Rounding Copilot | MedGemma</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        .rounding-container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+
+        .page-header {
+            display: flex; align-items: center; gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .page-header h1 { font-size: 1.7rem; font-weight: 700; color: var(--text-primary); margin: 0; }
+        .page-header p { color: var(--text-secondary); font-size: 0.95rem; margin: 0; }
+
+        .ward-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2rem;
+        }
+
+        .patient-card {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--border);
+        }
+        .patient-card-header {
+            display: flex; justify-content: space-between; align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+        .patient-name { font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
+        .patient-meta { font-size: 0.82rem; color: var(--text-secondary); margin-top: 0.2rem; }
+        .ward-badge {
+            font-size: 0.75rem; font-weight: 600; padding: 0.25rem 0.65rem;
+            border-radius: 20px; background: #dbeafe; color: #1d4ed8;
+        }
+        .ward-badge.icu { background: #fee2e2; color: #dc2626; }
+
+        .los-bar {
+            background: var(--bg-tertiary, #f3f4f6);
+            border-radius: 4px; height: 6px; margin: 0.75rem 0;
+        }
+        .los-bar-fill {
+            height: 100%; border-radius: 4px;
+            background: linear-gradient(90deg, #3b82f6, #1d4ed8);
+        }
+        .los-label { font-size: 0.78rem; color: var(--text-secondary); }
+
+        .info-row {
+            display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.5rem 0;
+        }
+        .info-chip {
+            font-size: 0.75rem; padding: 0.2rem 0.6rem;
+            background: var(--bg-tertiary, #f9fafb);
+            border: 1px solid var(--border);
+            border-radius: 20px; color: var(--text-secondary);
+        }
+        .info-chip.critical { background: #fef2f2; color: #dc2626; border-color: #fca5a5; }
+
+        .btn-generate-note {
+            width: 100%; margin-top: 1rem;
+            padding: 0.65rem 1rem;
+            background: linear-gradient(135deg, var(--primary), #1d4ed8);
+            color: white; border: none; border-radius: 8px;
+            font-weight: 600; font-size: 0.9rem; cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .btn-generate-note:hover { opacity: 0.9; }
+        .btn-generate-note:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .note-output {
+            display: none; margin-top: 1rem;
+        }
+        .note-output.visible { display: block; }
+        .note-box {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 8px; padding: 1rem;
+            font-size: 0.85rem;
+            white-space: pre-wrap; font-family: 'Inter', monospace;
+            max-height: 400px; overflow-y: auto;
+            color: var(--text-primary);
+        }
+
+        .todo-section { margin-top: 0.75rem; }
+        .todo-section h4 {
+            font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;
+        }
+        .todo-item {
+            display: flex; align-items: center; gap: 0.5rem;
+            font-size: 0.85rem; padding: 0.3rem 0;
+            color: var(--text-primary);
+        }
+        .todo-item input[type="checkbox"] { accent-color: var(--primary); }
+
+        .loading-spinner {
+            display: inline-block; width: 16px; height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .no-patients {
+            text-align: center; padding: 3rem;
+            color: var(--text-secondary); font-size: 0.95rem;
+        }
+
+        .note-source-badge {
+            font-size: 0.7rem; padding: 0.15rem 0.5rem;
+            border-radius: 20px; margin-left: 0.5rem;
+        }
+        .note-source-badge.medgemma { background: #dcfce7; color: #16a34a; }
+        .note-source-badge.fallback { background: #fef9c3; color: #ca8a04; }
+    </style>
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-left">
+            <a href="/" class="logo" style="text-decoration:none;">
+                <span class="logo-icon">⚕</span>
+                <span class="logo-text">MedGemma</span>
+            </a>
+            <div class="nav-links">
+                <a href="/">Encounters</a>
+                <a href="/rounding" class="active">Rounding</a>
+                <a href="/handoff">Handoff</a>
+                <a href="/safety-dashboard">Safety</a>
+                <a href="/shift-brief">Shift Brief</a>
+                <a href="/history">Patient History</a>
+                <a href="/compliance">Compliance</a>
+                <a href="/council">Diagnostic Council</a>
+                <a href="/patient-portal">Patient Portal</a>
+                <a href="/ai-portal">AI Chat Portal</a>
+                <a href="/simulation">Simulation</a>
+            </div>
+        </div>
+        <div class="nav-user">
+            <span class="user-role">Clinical Staff</span>
+        </div>
+    </header>
+
+    <main class="rounding-container">
+        <div class="page-header">
+            <div>
+                <h1>Inpatient Rounding Copilot</h1>
+                <p>AI-generated 24-hour progress notes, to-do lists, and discharge readiness for admitted patients.</p>
+            </div>
+        </div>
+
+        <div id="ward-grid" class="ward-grid">
+            <div class="no-patients">Loading inpatients…</div>
+        </div>
+    </main>
+
+    <script>
+        async function loadInpatients() {
+            const grid = document.getElementById('ward-grid');
+            try {
+                const res = await fetch('/api/inpatient/ward');
+                const data = await res.json();
+                const patients = data.inpatients || [];
+                if (!patients.length) {
+                    grid.innerHTML = '<div class="no-patients">No inpatients currently admitted.</div>';
+                    return;
+                }
+                grid.innerHTML = patients.map(p => renderPatientCard(p)).join('');
+            } catch (err) {
+                grid.innerHTML = `<div class="no-patients">Failed to load inpatients: ${err.message}</div>`;
+            }
+        }
+
+        function losColor(hours) {
+            if (hours < 48) return '#3b82f6';
+            if (hours < 120) return '#f59e0b';
+            return '#ef4444';
+        }
+
+        function renderPatientCard(p) {
+            const los = p.los_hours || 0;
+            const losDays = (los / 24).toFixed(1);
+            const losPct = Math.min((los / 240) * 100, 100);
+            const isICU = (p.ward || '').toUpperCase().includes('ICU');
+            const wardClass = isICU ? 'icu' : '';
+
+            return `
+            <div class="patient-card" id="card-${p.id}">
+                <div class="patient-card-header">
+                    <div>
+                        <div class="patient-name">${p.name}</div>
+                        <div class="patient-meta">${p.age}y ${p.gender || ''} · Bed ${p.bed || '?'} · ${p.attending || ''}</div>
+                    </div>
+                    <span class="ward-badge ${wardClass}">${p.ward || 'Ward'}</span>
+                </div>
+
+                <div class="los-bar">
+                    <div class="los-bar-fill" style="width:${losPct}%;background:${losColor(los)}"></div>
+                </div>
+                <div class="los-label">LOS: ${losDays} days</div>
+
+                <div class="info-row">
+                    <span class="info-chip ${p.code_status && p.code_status.toLowerCase().includes('dnr') ? 'critical' : ''}">
+                        Code: ${p.code_status || 'Unknown'}
+                    </span>
+                    <span class="info-chip">Admitted: ${p.admission_date ? new Date(p.admission_date).toLocaleDateString() : '?'}</span>
+                </div>
+
+                <button class="btn-generate-note" onclick="generateNote('${p.id}', this)">
+                    Generate Progress Note
+                </button>
+
+                <div class="note-output" id="note-${p.id}">
+                    <div class="note-box" id="note-text-${p.id}"></div>
+                    <div class="todo-section" id="todo-${p.id}"></div>
+                </div>
+            </div>`;
+        }
+
+        async function generateNote(patientId, btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> Generating…';
+            const noteDiv = document.getElementById(`note-${patientId}`);
+            const noteText = document.getElementById(`note-text-${patientId}`);
+            const todoDiv = document.getElementById(`todo-${patientId}`);
+
+            try {
+                const res = await fetch(`/api/inpatient/${patientId}/rounding-note`, { method: 'POST' });
+                const data = await res.json();
+
+                if (data.error) {
+                    noteText.textContent = 'Error: ' + data.error;
+                } else {
+                    const badge = data.source === 'medgemma'
+                        ? '<span class="note-source-badge medgemma">MedGemma</span>'
+                        : '<span class="note-source-badge fallback">Structured</span>';
+
+                    noteText.innerHTML = `<strong>Progress Note${badge}</strong>\n\n` + escapeHtml(data.note_text);
+
+                    if (data.todo_items && data.todo_items.length) {
+                        todoDiv.innerHTML = `
+                            <h4>To-Do Items (${data.todo_items.length})</h4>
+                            ${data.todo_items.map(t =>
+                                `<div class="todo-item">
+                                    <input type="checkbox" id="todo-${Math.random().toString(36).slice(2)}">
+                                    <label>${escapeHtml(t)}</label>
+                                </div>`
+                            ).join('')}`;
+                    }
+
+                    if (data.last_note_hours_ago !== null) {
+                        const lastNoteEl = document.createElement('div');
+                        lastNoteEl.style.cssText = 'font-size:0.75rem;color:#6b7280;margin-top:0.5rem;';
+                        lastNoteEl.textContent = `Last physician note: ${data.last_note_hours_ago}h ago`;
+                        todoDiv.appendChild(lastNoteEl);
+                    }
+                }
+                noteDiv.classList.add('visible');
+            } catch (err) {
+                noteText.textContent = 'Network error: ' + err.message;
+                noteDiv.classList.add('visible');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Regenerate Note';
+            }
+        }
+
+        function escapeHtml(str) {
+            return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        loadInpatients();
+    </script>
+</body>
+</html>

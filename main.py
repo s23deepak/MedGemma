@@ -32,6 +32,12 @@ from src.shift import get_shift_brief_service
 from src.referral import get_referral_letter_service
 from src.simulation import get_simulation_engine, list_cases as list_sim_cases
 from src.trends import get_local_health_trends_service
+from src.inpatient import (
+    get_rounding_service,
+    get_sbar_service,
+    get_safety_service,
+    get_discharge_planner,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -57,6 +63,12 @@ referral_service = None
 simulation_engine = None
 local_trends_service = None
 trends_refresh_task: asyncio.Task | None = None
+
+# Inpatient services
+rounding_service = None
+sbar_service = None
+safety_service = None
+discharge_planner = None
 
 # Store active sessions
 sessions: dict[str, dict] = {}
@@ -171,23 +183,30 @@ def load_models_lazy():
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global fhir_server, soap_generator, treatment_service, discharge_monitor, prior_auth_service, pubmed_agent, shift_brief_service, referral_service, simulation_engine, local_trends_service, trends_refresh_task
+    global rounding_service, sbar_service, safety_service, discharge_planner
     
     logger.info("Starting MedGemma Clinical Assistant...")
 
-    # Initialize FHIR server — Firebase is the primary data store
-    try:
-        fhir_server = FirestoreFHIRServer()
-        logger.info("Using Firestore-backed FHIR server")
-    except RuntimeError:
-        logger.critical(
-            "Firebase is not configured. Place firebase-key.json in the project root "
-            "or set the FIREBASE_KEY_PATH environment variable. "
-            "See docs/firebase_setup.md for instructions."
-        )
-        raise SystemExit(1)
-    except Exception as e:
-        logger.critical(f"Firestore initialisation failed: {e}")
-        raise
+    # Initialize FHIR server — use MockFHIRServer in simulated mode, Firestore otherwise
+    _simulated = os.environ.get("SIMULATED_MODE", "false").lower() in ("1", "true", "yes")
+    if _simulated:
+        from src.ehr.fhir_mock import MockFHIRServer
+        fhir_server = MockFHIRServer()
+        logger.info("Using Mock FHIR server (SIMULATED_MODE=true)")
+    else:
+        try:
+            fhir_server = FirestoreFHIRServer()
+            logger.info("Using Firestore-backed FHIR server")
+        except RuntimeError:
+            logger.critical(
+                "Firebase is not configured. Place firebase-key.json in the project root "
+                "or set the FIREBASE_KEY_PATH environment variable. "
+                "See docs/firebase_setup.md for instructions."
+            )
+            raise SystemExit(1)
+        except Exception as e:
+            logger.critical(f"Firestore initialisation failed: {e}")
+            raise
     
     soap_generator = SOAPGenerator()
 
@@ -200,7 +219,11 @@ async def lifespan(app: FastAPI):
     referral_service = get_referral_letter_service(fhir_server)
     simulation_engine = get_simulation_engine()
     local_trends_service = get_local_health_trends_service()
-    logger.info("Treatment summary, discharge monitoring, prior auth, PubMed synthesis, shift brief, referral letter, and simulation services initialized")
+    rounding_service  = get_rounding_service(fhir_server)
+    sbar_service      = get_sbar_service(fhir_server)
+    safety_service    = get_safety_service(fhir_server)
+    discharge_planner = get_discharge_planner(fhir_server)
+    logger.info("Treatment summary, discharge monitoring, prior auth, PubMed synthesis, shift brief, referral letter, simulation, and inpatient services initialized")
 
     # Run 60-day hospital-case finalization in background (non-blocking)
     import asyncio
@@ -1117,6 +1140,32 @@ async def council_deliberate(request: Request):
     )
     
     return deliberation.to_dict()
+
+
+@app.post("/api/council/iterative-deliberate")
+async def council_iterative_deliberate(request: Request):
+    """Run 2-round iterative diagnostic council with PubMed evidence feedback."""
+    from src.council import get_diagnostic_council
+
+    data = await request.json()
+    symptoms = data.get("symptoms", [])
+    patient_history = data.get("patient_history", "")
+    imaging_findings = data.get("imaging_findings", "")
+    num_rollouts = min(int(data.get("num_rollouts", 5)), 10)
+    vitals = data.get("vitals")
+
+    if not symptoms:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "No symptoms provided"}, status_code=400)
+
+    council = get_diagnostic_council(agent=agent, num_rollouts=num_rollouts, pubmed_agent=pubmed_agent)
+    result = council.iterative_deliberate(
+        symptoms=symptoms,
+        patient_history=patient_history,
+        imaging_findings=imaging_findings,
+        vitals=vitals,
+    )
+    return result.to_dict()
 
 
 @app.get("/api/council/history")
@@ -2050,8 +2099,92 @@ async def pubmed_ddi_monitor(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Inpatient workflow routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/rounding", response_class=HTMLResponse)
+async def rounding_page(request: Request):
+    """Inpatient rounding copilot page."""
+    return templates.TemplateResponse("rounding.html", {"request": request})
+
+
+@app.get("/handoff", response_class=HTMLResponse)
+async def handoff_page(request: Request):
+    """SBAR handoff generator page."""
+    return templates.TemplateResponse("handoff.html", {"request": request})
+
+
+@app.get("/safety-dashboard", response_class=HTMLResponse)
+async def safety_dashboard_page(request: Request):
+    """Inpatient safety watchlist dashboard."""
+    return templates.TemplateResponse("safety_dashboard.html", {"request": request})
+
+
+@app.get("/api/inpatient/ward")
+async def api_inpatient_ward():
+    """Return all currently admitted inpatients with basic status info."""
+    if rounding_service is None:
+        raise HTTPException(status_code=503, detail="Rounding service not initialized")
+    patients = rounding_service.get_admitted_patients()
+    return JSONResponse(content={"inpatients": patients})
+
+
+@app.post("/api/inpatient/{patient_id}/rounding-note")
+async def api_rounding_note(patient_id: str):
+    """Generate a 24-hour inpatient progress note for a patient."""
+    if rounding_service is None:
+        raise HTTPException(status_code=503, detail="Rounding service not initialized")
+    result = rounding_service.generate_progress_note(patient_id, agent=agent)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return JSONResponse(content=result)
+
+
+@app.post("/api/inpatient/{patient_id}/sbar")
+async def api_sbar(patient_id: str):
+    """Generate an SBAR handoff packet with completeness audit."""
+    if sbar_service is None:
+        raise HTTPException(status_code=503, detail="SBAR service not initialized")
+    result = sbar_service.generate_sbar(patient_id, agent=agent)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return JSONResponse(content=result)
+
+
+@app.get("/api/inpatient/safety")
+async def api_safety_dashboard(ward: str | None = None):
+    """Run safety checks across all inpatients (optionally filtered by ward)."""
+    if safety_service is None:
+        raise HTTPException(status_code=503, detail="Safety service not initialized")
+    result = safety_service.get_ward_safety_dashboard(ward=ward, agent=agent)
+    return JSONResponse(content=result)
+
+
+@app.get("/api/inpatient/{patient_id}/safety")
+async def api_patient_safety(patient_id: str):
+    """Run safety checks for a single inpatient, with AI explanations."""
+    if safety_service is None:
+        raise HTTPException(status_code=503, detail="Safety service not initialized")
+    alerts = safety_service.run_safety_checks(patient_id, agent=agent)
+    return JSONResponse(content={"patient_id": patient_id, "alerts": [a.to_dict() for a in alerts]})
+
+
+@app.post("/api/inpatient/{patient_id}/discharge-summary")
+async def api_discharge_summary(patient_id: str, request: Request):
+    """Generate a patient-friendly discharge summary with readmission risk assessment."""
+    if discharge_planner is None:
+        raise HTTPException(status_code=503, detail="Discharge planner not initialized")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    soap_note = payload.get("soap_note", "") if payload else ""
+    result = discharge_planner.generate_discharge_summary(patient_id, soap_note=soap_note, agent=agent)
+    return JSONResponse(content=result.to_dict())
+
+
 if __name__ == "__main__":
-    
     parser = argparse.ArgumentParser(description="MedGemma Clinical Assistant")
     parser.add_argument("--use-vllm", action="store_true", help="Use vLLM backend for faster inference")
     parser.add_argument("--simulated", action="store_true", help="Run in simulated mode (no GPU)")

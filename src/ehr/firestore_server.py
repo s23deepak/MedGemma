@@ -68,8 +68,8 @@ class FirestoreFHIRServer:
                 full_name = str(name_obj)
         else:
             full_name = str(raw_name)
-            
-        return {
+
+        summary = {
             "patient": {
                 "id": patient_id,
                 "name": full_name,
@@ -111,6 +111,18 @@ class FirestoreFHIRServer:
             ],
             "images": images
         }
+
+        if patient_data.get("encounter_type") == "inpatient":
+            summary["patient"].update({
+                "encounter_type": "inpatient",
+                "admission_date": patient_data.get("admission_date"),
+                "ward": patient_data.get("ward"),
+                "bed": patient_data.get("bed"),
+                "code_status": patient_data.get("code_status"),
+                "attending": patient_data.get("attending"),
+            })
+
+        return summary
     
     def get_appointment_summary(self, patient_id: str) -> dict | None:
         """Get the latest appointment for a patient."""
@@ -181,10 +193,48 @@ class FirestoreFHIRServer:
                 "id": doc.id,
                 "name": data.get("name", "Unknown"),
                 "gender": data.get("gender"),
-                "birthDate": data.get("birthDate")
+                "birthDate": data.get("birthDate"),
+                "encounter_type": data.get("encounter_type", "outpatient"),
             })
         return patients
-    
+
+    def list_inpatients(self) -> list[dict]:
+        """List only admitted (inpatient) patients with ward/bed info."""
+        result = []
+        for doc in self.db.collection("patients").stream():
+            data = doc.to_dict()
+            if data.get("encounter_type") != "inpatient":
+                continue
+            birth_date_str = data.get("birthDate", "")
+            try:
+                birth_date = datetime.strptime(birth_date_str, "%Y-%m-%d")
+                age = (datetime.now() - birth_date).days // 365
+            except (ValueError, TypeError):
+                age = 0
+            result.append({
+                "id": doc.id,
+                "name": data.get("name", "Unknown"),
+                "age": age,
+                "gender": data.get("gender"),
+                "ward": data.get("ward"),
+                "bed": data.get("bed"),
+                "admission_date": data.get("admission_date"),
+                "code_status": data.get("code_status"),
+                "attending": data.get("attending"),
+            })
+        return result
+
+    def get_active_orders(self, patient_id: str) -> list[dict]:
+        """Return active orders for a patient."""
+        orders = self._get_subcollection(patient_id, "active_orders")
+        return [o for o in orders if o.get("status") in ("active", "pending")]
+
+    def get_progress_notes(self, patient_id: str) -> list[dict]:
+        """Return progress notes for a patient, newest first."""
+        notes = self._get_subcollection(patient_id, "progress_notes")
+        notes.sort(key=lambda n: n.get("created_at", ""), reverse=True)
+        return notes
+
     def _get_subcollection(self, patient_id: str, collection_name: str) -> list[dict]:
         """Get all documents from a patient subcollection."""
         docs = (

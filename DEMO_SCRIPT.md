@@ -91,13 +91,21 @@ Click **Stop Recording**
 
 ---
 
-### Act 6: Diagnostic Council (30 seconds)
+### Act 6: Diagnostic Council (45 seconds)
 1. Navigate to **Diagnostic Council** in the nav
-2. The patient information is pre-loaded — enter the symptoms: `chest pain, shortness of breath, cough`
+2. Enter symptoms: `chest pain, shortness of breath, cough, unexplained weight loss`
 3. Click **🧠 Start Council Deliberation**
 4. *(5 independent AI opinions appear with consensus scoring)*
 5. **HIGHLIGHT** the **📚 PubMed — Zebra Hunt Results** panel below the discussion
    - Show rare diagnoses the council flagged from literature that might otherwise be missed
+
+*Optional Deep Dive (~30s extra):*
+
+6. Click **🔄 Deep Dive (2-Round Evidence Loop)**
+   - Round 1 deliberates + runs PubMed Zebra Hunt
+   - If rare diagnoses found, Round 2 re-deliberates with those diagnoses injected into every AI opinion prompt
+   - Show whether consensus **shifted** (⚡ yellow banner) or **held** (✓ green banner)
+   - **NARRATE**: "This is the evidence feedback loop — the system challenges its own initial hypothesis using real medical literature"
 
 ---
 
@@ -129,6 +137,33 @@ Click **Stop Recording**
 
 ---
 
+### Act 10: Inpatient Workflow (60 seconds)
+*(Optional extended demo — shows admitted patient care)*
+
+**10a — Rounding Copilot** (`/rounding`)
+1. Navigate to **Rounding** in the nav
+2. *(Two admitted patients load: Raymond Okafor — ICU Sepsis, Dorothy Chen — CHF)*
+3. Click **Generate Progress Note** for Raymond Okafor
+4. *(SOAP note generates with to-do checklist: verify renal function, follow up pending labs)*
+
+**10b — SBAR Handoff** (`/handoff`)
+1. Navigate to **Handoff**
+2. Select **Raymond Okafor**
+3. Click **Generate Sign-Out**
+4. *(5-section SBAR displays with completeness badge — highlight any missing fields)*
+
+**10c — Safety Watchlist** (`/safety-dashboard`)
+1. Navigate to **Safety**
+2. *(Dashboard auto-runs — Raymond Okafor triggers: VTE prophylaxis missing (CRITICAL) + stale progress note)*
+3. **HIGHLIGHT** the CRITICAL alert card with suggested action text
+
+**10d — Discharge Planner** (API call, show in browser or terminal)
+1. From the Safety page, note Dorothy Chen is ready for discharge
+2. Run `POST /api/inpatient/P005/discharge-summary`
+3. *(HIGH readmission risk response — CHF + CKD — with MISSING fields flagged for physician)*
+
+---
+
 ## 🎯 Key Points to Emphasize
 
 1. **Real-time transcription** — Show words appearing as you speak
@@ -139,6 +174,9 @@ Click **Stop Recording**
 6. **Multi-opinion consensus** — Diagnostic Council with 5 independent analyses
 7. **Human-in-the-loop** — Doctor approval required before EHR update
 8. **Time savings** — Documentation generated automatically
+9. **Inpatient safety net** — VTE, Foley, and documentation compliance alerts catch what gets missed on busy wards
+10. **Discharge quality** — MISSING-field enforcement prevents incomplete discharge documents from being signed
+11. **Iterative evidence loop** — Deep Dive challenges the initial AI consensus with PubMed rare diagnoses across 2 deliberation rounds
 
 ---
 
@@ -172,10 +210,14 @@ The chest X-ray shows... [AI should flag potential cardiac emergency]
 | Patient EHR | Home | Patient list → click patient → EHR loads |
 | Dictation + SOAP | Home | Record → Generate SOAP → See missed diagnoses |
 | PubMed in Encounter | Home | 📚 PubMed Literature card auto-appears post-SOAP |
-| Diagnostic Council | /council | Enter symptoms → 5 opinions → PubMed Zebra Hunt |
+| Diagnostic Council | /council | Enter symptoms → 5 opinions → PubMed Zebra Hunt → optional Deep Dive 2-round loop |
 | AI Chat Portal | /ai-portal | Select patient → annotate image → chat → Evidence Check |
 | Compliance | /compliance | Run check → see flags and rates |
 | Patient Portal | /patient-portal | Ask question → emergency detection demo |
+| Rounding Copilot | /rounding | Select inpatient → generate progress note → to-do list |
+| SBAR Handoff | /handoff | Select patient → generate sign-out → completeness audit |
+| Safety Watchlist | /safety-dashboard | Auto-runs → critical VTE alert for P004 |
+| Discharge Planner | API | `POST /api/inpatient/P005/discharge-summary` → HIGH risk |
 
 ---
 

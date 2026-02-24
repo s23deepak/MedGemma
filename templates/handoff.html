@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SBAR Handoff Generator | MedGemma</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        .handoff-container { max-width: 1100px; margin: 0 auto; padding: 2rem; }
+
+        .selector-card {
+            background: var(--bg-secondary);
+            border-radius: 12px; padding: 1.75rem 2rem;
+            margin-bottom: 2rem; box-shadow: var(--shadow-sm);
+            display: flex; gap: 1.5rem; align-items: flex-end; flex-wrap: wrap;
+        }
+        .selector-group { display: flex; flex-direction: column; gap: 0.4rem; flex: 1; min-width: 220px; }
+        .selector-group label {
+            font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 0.05em;
+        }
+        .selector-group select {
+            padding: 0.75rem 1rem; border: 1px solid var(--border);
+            border-radius: 8px; background: var(--bg-primary);
+            color: var(--text-primary); font-family: inherit; font-size: 0.95rem;
+        }
+        .btn-generate {
+            padding: 0.75rem 2rem;
+            background: linear-gradient(135deg, var(--primary), #1d4ed8);
+            color: white; border: none; border-radius: 8px;
+            font-weight: 600; cursor: pointer; white-space: nowrap;
+            font-size: 0.95rem; transition: opacity 0.2s;
+        }
+        .btn-generate:hover { opacity: 0.9; }
+        .btn-generate:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        /* SBAR sections */
+        .sbar-grid {
+            display: grid; gap: 1.25rem;
+            grid-template-columns: 1fr 1fr;
+            margin-bottom: 1.5rem;
+        }
+        .sbar-section {
+            border-radius: 12px; padding: 1.5rem;
+            border-left: 5px solid;
+        }
+        .sbar-section.situation  { background: #eff6ff; border-color: #3b82f6; }
+        .sbar-section.background { background: #f0fdf4; border-color: #22c55e; }
+        .sbar-section.assessment { background: #fffbeb; border-color: #f59e0b; }
+        .sbar-section.recommendation { background: #fef2f2; border-color: #ef4444; }
+        .sbar-section.contingency {
+            grid-column: 1 / -1;
+            background: #faf5ff; border-color: #a855f7;
+        }
+        .sbar-label {
+            font-size: 0.75rem; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.08em;
+            margin-bottom: 0.6rem;
+        }
+        .sbar-section.situation  .sbar-label { color: #1d4ed8; }
+        .sbar-section.background .sbar-label { color: #15803d; }
+        .sbar-section.assessment .sbar-label { color: #b45309; }
+        .sbar-section.recommendation .sbar-label { color: #b91c1c; }
+        .sbar-section.contingency .sbar-label { color: #7c3aed; }
+        .sbar-content {
+            font-size: 0.88rem; white-space: pre-wrap;
+            color: var(--text-primary); line-height: 1.6;
+        }
+
+        /* Completeness audit */
+        .completeness-card {
+            background: var(--bg-secondary); border-radius: 12px;
+            padding: 1.5rem; box-shadow: var(--shadow-sm);
+            margin-bottom: 1.5rem;
+        }
+        .completeness-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 1rem;
+        }
+        .completeness-header h3 { font-size: 1rem; font-weight: 600; margin: 0; }
+        .score-badge {
+            font-size: 1.1rem; font-weight: 700;
+            padding: 0.3rem 0.9rem; border-radius: 20px;
+        }
+        .score-badge.high   { background: #dcfce7; color: #15803d; }
+        .score-badge.medium { background: #fef9c3; color: #b45309; }
+        .score-badge.low    { background: #fee2e2; color: #b91c1c; }
+
+        .check-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 0.5rem; margin-bottom: 1rem;
+        }
+        .check-item {
+            display: flex; align-items: center; gap: 0.5rem;
+            font-size: 0.82rem; padding: 0.4rem 0.6rem;
+            border-radius: 6px; background: var(--bg-primary);
+            border: 1px solid var(--border);
+        }
+        .check-pass { color: #16a34a; font-weight: 700; }
+        .check-fail { color: #dc2626; font-weight: 700; }
+
+        .missing-list { margin: 0; padding: 0; list-style: none; }
+        .missing-list li {
+            font-size: 0.85rem; padding: 0.3rem 0.5rem;
+            color: var(--text-secondary);
+        }
+        .missing-list li::before { content: "⚠ "; }
+
+        .loading-spinner {
+            display: inline-block; width: 16px; height: 16px;
+            border: 2px solid rgba(255,255,255,0.3); border-top-color: white;
+            border-radius: 50%; animation: spin 0.7s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        #sbar-output { display: none; }
+        #sbar-output.visible { display: block; }
+    </style>
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-left">
+            <a href="/" class="logo" style="text-decoration:none;">
+                <span class="logo-icon">⚕</span>
+                <span class="logo-text">MedGemma</span>
+            </a>
+            <div class="nav-links">
+                <a href="/">Encounters</a>
+                <a href="/rounding">Rounding</a>
+                <a href="/handoff" class="active">Handoff</a>
+                <a href="/safety-dashboard">Safety</a>
+                <a href="/shift-brief">Shift Brief</a>
+                <a href="/history">Patient History</a>
+                <a href="/compliance">Compliance</a>
+                <a href="/council">Diagnostic Council</a>
+                <a href="/patient-portal">Patient Portal</a>
+                <a href="/ai-portal">AI Chat Portal</a>
+                <a href="/simulation">Simulation</a>
+            </div>
+        </div>
+        <div class="nav-user">
+            <span class="user-role">Clinical Staff</span>
+        </div>
+    </header>
+
+    <main class="handoff-container">
+        <div style="margin-bottom:2rem">
+            <h1 style="font-size:1.7rem;font-weight:700;margin:0">SBAR Handoff Generator</h1>
+            <p style="color:var(--text-secondary);margin:0.3rem 0 0">
+                Generate structured sign-out with Situation–Background–Assessment–Recommendation and automated completeness audit.
+            </p>
+        </div>
+
+        <div class="selector-card">
+            <div class="selector-group">
+                <label>Select Inpatient</label>
+                <select id="patient-select">
+                    <option value="">Loading patients…</option>
+                </select>
+            </div>
+            <button class="btn-generate" id="btn-gen" onclick="generateSBAR()">
+                Generate Sign-Out
+            </button>
+        </div>
+
+        <div id="sbar-output">
+            <!-- completeness -->
+            <div class="completeness-card" id="completeness-card">
+                <div class="completeness-header">
+                    <h3>Completeness Audit</h3>
+                    <span class="score-badge" id="score-badge">–</span>
+                </div>
+                <div class="check-grid" id="check-grid"></div>
+                <ul class="missing-list" id="missing-list"></ul>
+            </div>
+
+            <!-- SBAR sections -->
+            <div class="sbar-grid" id="sbar-grid"></div>
+        </div>
+    </main>
+
+    <script>
+        async function loadPatients() {
+            const sel = document.getElementById('patient-select');
+            try {
+                const res = await fetch('/api/inpatient/ward');
+                const data = await res.json();
+                const patients = data.inpatients || [];
+                sel.innerHTML = patients.length
+                    ? '<option value="">Select a patient…</option>' +
+                      patients.map(p => `<option value="${p.id}">${p.name} — ${p.ward} ${p.bed}</option>`).join('')
+                    : '<option value="">No inpatients found</option>';
+            } catch {
+                sel.innerHTML = '<option value="">Failed to load</option>';
+            }
+        }
+
+        async function generateSBAR() {
+            const pid = document.getElementById('patient-select').value;
+            if (!pid) return alert('Please select a patient.');
+            const btn = document.getElementById('btn-gen');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> Generating…';
+
+            try {
+                const res = await fetch(`/api/inpatient/${pid}/sbar`, { method: 'POST' });
+                const data = await res.json();
+                renderSBAR(data);
+                document.getElementById('sbar-output').classList.add('visible');
+            } catch (err) {
+                alert('Error: ' + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Regenerate Sign-Out';
+            }
+        }
+
+        function renderSBAR(data) {
+            const sbar = data.sbar || {};
+            const comp = data.completeness || {};
+
+            // Score badge
+            const pct = comp.percentage || 0;
+            const badge = document.getElementById('score-badge');
+            badge.textContent = pct + '% Complete';
+            badge.className = 'score-badge ' + (pct >= 80 ? 'high' : pct >= 60 ? 'medium' : 'low');
+
+            // Check grid
+            const checks = comp.checks || {};
+            const checkLabels = {
+                code_status: 'Code Status', allergies: 'Allergies',
+                high_risk_meds: 'High-Risk Meds', active_devices: 'Active Devices',
+                contingency_plan: 'Contingency Plan', admission_reason: 'Admission Reason',
+                assessment_present: 'Assessment', recommendation_present: 'Recommendation',
+            };
+            document.getElementById('check-grid').innerHTML =
+                Object.entries(checkLabels).map(([k, label]) => {
+                    const pass = checks[k];
+                    return `<div class="check-item">
+                        <span class="${pass ? 'check-pass' : 'check-fail'}">${pass ? '✓' : '✗'}</span>
+                        ${label}
+                    </div>`;
+                }).join('');
+
+            // Missing list
+            const missing = comp.missing_fields || [];
+            const warnings = comp.warnings || [];
+            document.getElementById('missing-list').innerHTML =
+                [...missing, ...warnings].map(m => `<li>${escapeHtml(m)}</li>`).join('');
+
+            // SBAR sections
+            const sections = [
+                { key: 'situation', label: 'S — Situation', cls: 'situation' },
+                { key: 'background', label: 'B — Background', cls: 'background' },
+                { key: 'assessment', label: 'A — Assessment', cls: 'assessment' },
+                { key: 'recommendation', label: 'R — Recommendation', cls: 'recommendation' },
+                { key: 'contingency_plans', label: 'Contingency Plans', cls: 'contingency' },
+            ];
+            document.getElementById('sbar-grid').innerHTML = sections.map(s =>
+                `<div class="sbar-section ${s.cls}">
+                    <div class="sbar-label">${s.label}</div>
+                    <div class="sbar-content">${escapeHtml(sbar[s.key] || 'No data.')}</div>
+                </div>`
+            ).join('');
+        }
+
+        function escapeHtml(str) {
+            return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        loadPatients();
+    </script>
+</body>
+</html>

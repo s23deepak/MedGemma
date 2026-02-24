@@ -1,0 +1,78 @@
+{
+  "event_categories": {
+    "respiratory_irritant": [
+      "air pollution",
+      "asthma",
+      "bronchitis",
+      "dyspnea",
+      "smoke inhalation injury",
+      "water pollution"
+    ],
+    "infectious_outbreak": [
+      "communicable diseases",
+      "covid-19",
+      "influenza",
+      "norovirus infections",
+      "respiratory syncytial virus infections",
+      "waterborne infections"
+    ],
+    "heat_risk": [
+      "dehydration",
+      "heat stress disorders",
+      "heat stroke"
+    ],
+    "water_contamination": [
+      "air pollution",
+      "gastroenteritis",
+      "legionellosis",
+      "norovirus infections",
+      "respiratory syncytial virus infections",
+      "water pollution",
+      "waterborne infections"
+    ]
+  },
+  "symptom_synonyms": {
+    "cough": [
+      "cough"
+    ],
+    "dyspnea": [
+      "dyspnea"
+    ],
+    "shortness of breath": [
+      "shortness of breath"
+    ],
+    "wheezing": [
+      "wheezing"
+    ],
+    "fever": [
+      "fever"
+    ],
+    "chills": [
+      "chills"
+    ],
+    "nausea": [
+      "nausea"
+    ],
+    "vomiting": [
+      "vomiting"
+    ],
+    "diarrhea": [
+      "diarrhea"
+    ],
+    "fatigue": [
+      "fatigue"
+    ],
+    "dizziness": [
+      "dizziness"
+    ],
+    "headache": [
+      "headache"
+    ]
+  },
+  "fetched_at": "2026-02-24T06:52:51.266119+00:00",
+  "source": "NLM MeSH Lookup API",
+  "vector_enrichment": {
+    "backend": "in_memory",
+    "enabled": true
+  }
+}

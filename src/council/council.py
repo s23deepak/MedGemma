@@ -75,12 +75,194 @@ class CouncilDeliberation:
         }
 
 
+@dataclass
+class IterativeDeliberation:
+    """Result of a 2-round iterative deliberation with PubMed evidence feedback."""
+    case_id: str
+    created_at: datetime
+    initial_consensus: str
+    final_consensus: str
+    consensus_shifted: bool
+    rare_diagnoses_injected: list[str]
+    rounds: list[dict]
+    final_recommendation: str
+    discussion_summary: str
+
+    def to_dict(self) -> dict:
+        return {
+            "case_id": self.case_id,
+            "created_at": self.created_at.isoformat(),
+            "initial_consensus": self.initial_consensus,
+            "final_consensus": self.final_consensus,
+            "consensus_shifted": self.consensus_shifted,
+            "rare_diagnoses_injected": self.rare_diagnoses_injected,
+            "rounds": self.rounds,
+            "final_recommendation": self.final_recommendation,
+            "discussion_summary": self.discussion_summary,
+        }
+
+
+# ── Module-level helpers (importable by graph.py without circular deps) ──────
+
+def _calc_consensus(
+    opinions: list["DiagnosticOpinion"],
+) -> tuple[str | None, "ConsensusStrength", float]:
+    """Calculate consensus from multiple opinions."""
+    if not opinions:
+        return None, ConsensusStrength.SPLIT, 0.0
+
+    diagnosis_counts: dict[str, int] = {}
+    diagnosis_confidences: dict[str, list[float]] = {}
+
+    for opinion in opinions:
+        diag = opinion.diagnosis
+        diagnosis_counts[diag] = diagnosis_counts.get(diag, 0) + 1
+        if diag not in diagnosis_confidences:
+            diagnosis_confidences[diag] = []
+        diagnosis_confidences[diag].append(opinion.confidence)
+
+    max_count = max(diagnosis_counts.values())
+    agreement_rate = max_count / len(opinions)
+    top_diagnosis = max(diagnosis_counts.keys(), key=lambda d: diagnosis_counts[d])
+    avg_confidence = sum(diagnosis_confidences[top_diagnosis]) / len(
+        diagnosis_confidences[top_diagnosis]
+    )
+
+    if agreement_rate > 0.8:
+        strength = ConsensusStrength.STRONG
+    elif agreement_rate >= 0.6:
+        strength = ConsensusStrength.MODERATE
+    elif agreement_rate >= 0.4:
+        strength = ConsensusStrength.WEAK
+    else:
+        strength = ConsensusStrength.SPLIT
+
+    return top_diagnosis, strength, avg_confidence
+
+
+def _synth_discussion(
+    opinions: list["DiagnosticOpinion"],
+    consensus: str,
+) -> str:
+    """Synthesize a discussion summary from opinions."""
+    agreeing = [o for o in opinions if o.diagnosis == consensus]
+    dissenting = [o for o in opinions if o.diagnosis != consensus]
+
+    parts = [f"The council reviewed the case and generated {len(opinions)} independent analyses."]
+
+    if agreeing:
+        parts.append(
+            f"\n\n**Majority Opinion ({len(agreeing)}/{len(opinions)}):** "
+            f"The primary diagnosis of '{consensus}' was supported by {len(agreeing)} council members. "
+            f"Key reasoning: {agreeing[0].reasoning}"
+        )
+
+    if dissenting:
+        parts.append(
+            f"\n\n**Alternative Considerations:** "
+            f"{len(dissenting)} member(s) suggested alternative diagnoses including: "
+            f"{', '.join(set(o.diagnosis for o in dissenting))}. "
+            f"These should be considered in the differential."
+        )
+
+    all_tests: set[str] = set()
+    for o in opinions:
+        all_tests.update(o.recommended_tests)
+
+    parts.append(
+        f"\n\n**Recommended Workup:** Based on the collective analysis, "
+        f"the following tests are recommended: {', '.join(sorted(all_tests))}."
+    )
+
+    return "".join(parts)
+
+
+def _get_diagnoses(symptoms: list[str]) -> list[dict]:
+    """Get possible diagnoses based on symptoms (mock data)."""
+    symptom_str = " ".join(symptoms).lower()
+    diagnoses: list[dict] = []
+
+    if "chest pain" in symptom_str or "shortness of breath" in symptom_str:
+        diagnoses.extend([
+            {
+                "name": "Acute Coronary Syndrome",
+                "reasoning": "Chest pain with cardiac risk factors warrants immediate cardiac workup",
+                "tests": ["Troponin", "ECG", "Chest X-ray"],
+                "urgency": "emergent",
+                "confidence_boost": 0.1,
+            },
+            {
+                "name": "Pulmonary Embolism",
+                "reasoning": "Sudden onset dyspnea with chest pain suggests PE until proven otherwise",
+                "tests": ["D-dimer", "CT-PA", "Lower extremity doppler"],
+                "urgency": "emergent",
+                "confidence_boost": 0.05,
+            },
+            {
+                "name": "Pneumonia",
+                "reasoning": "Respiratory symptoms may indicate infectious etiology",
+                "tests": ["Chest X-ray", "CBC", "Procalcitonin"],
+                "urgency": "urgent",
+                "confidence_boost": 0,
+            },
+        ])
+
+    if "cough" in symptom_str or "fever" in symptom_str:
+        diagnoses.extend([
+            {
+                "name": "Community-Acquired Pneumonia",
+                "reasoning": "Cough with fever classic presentation for pneumonia",
+                "tests": ["Chest X-ray", "CBC", "Sputum culture"],
+                "urgency": "urgent",
+                "confidence_boost": 0.08,
+            },
+            {
+                "name": "Acute Bronchitis",
+                "reasoning": "Cough without significant fever may be viral bronchitis",
+                "tests": ["Clinical diagnosis", "Chest X-ray if needed"],
+                "urgency": "routine",
+                "confidence_boost": 0,
+            },
+        ])
+
+    if "headache" in symptom_str:
+        diagnoses.extend([
+            {
+                "name": "Tension Headache",
+                "reasoning": "Most common cause of headache, bilateral and mild-moderate",
+                "tests": ["Clinical diagnosis"],
+                "urgency": "routine",
+                "confidence_boost": 0,
+            },
+            {
+                "name": "Migraine",
+                "reasoning": "Recurrent headache with associated symptoms suggests migraine",
+                "tests": ["Clinical diagnosis", "Consider MRI if atypical"],
+                "urgency": "routine",
+                "confidence_boost": 0.05,
+            },
+        ])
+
+    if not diagnoses:
+        diagnoses = [
+            {
+                "name": "Further Evaluation Needed",
+                "reasoning": "Insufficient information for definitive diagnosis",
+                "tests": ["Comprehensive metabolic panel", "CBC"],
+                "urgency": "routine",
+                "confidence_boost": -0.2,
+            }
+        ]
+
+    return diagnoses
+
+
 class DiagnosticCouncil:
     """
     Multi-rollout diagnostic council that generates multiple AI opinions
     and synthesizes them into a consensus recommendation.
     """
-    
+
     def __init__(self, agent=None, num_rollouts: int = 5, pubmed_agent=None):
         """
         Initialize the diagnostic council.
@@ -94,12 +276,81 @@ class DiagnosticCouncil:
         self.num_rollouts = num_rollouts
         self.pubmed_agent = pubmed_agent
         self.deliberation_history: list[CouncilDeliberation] = []
+        self._graph = None  # lazy-built LangGraph workflow
+
+    def _get_graph(self):
+        """Lazily build and cache the LangGraph workflow."""
+        if self._graph is None:
+            from .graph import build_council_graph
+            self._graph = build_council_graph(self.agent, self.pubmed_agent)
+        return self._graph
+
+    def _build_deliberation(
+        self,
+        case_id: str,
+        case_summary: str,
+        result: dict,
+        op_key: str = "opinions",
+        consensus_key: str = "consensus_diagnosis",
+        strength_key: str = "consensus_strength",
+        confidence_key: str = "consensus_confidence",
+        discussion_key: str = "discussion_summary",
+        pubmed_insights: dict | None = None,
+    ) -> CouncilDeliberation:
+        """Build a CouncilDeliberation from LangGraph invoke() result."""
+        op_dicts = result.get(op_key, [])
+        opinions = [
+            DiagnosticOpinion(
+                opinion_id=o["opinion_id"],
+                diagnosis=o["diagnosis"],
+                confidence=o["confidence"],
+                reasoning=o["reasoning"],
+                differential_diagnoses=o.get("differential_diagnoses", []),
+                recommended_tests=o.get("recommended_tests", []),
+                urgency=o["urgency"],
+            )
+            for o in op_dicts
+        ]
+        consensus_diagnosis = result.get(consensus_key)
+        consensus_strength = ConsensusStrength(result.get(strength_key, "weak"))
+        consensus_confidence = float(result.get(confidence_key, 0.0))
+        discussion = result.get(discussion_key, "")
+
+        urgency_levels = [o.urgency for o in opinions]
+        most_urgent = (
+            "emergent" if "emergent" in urgency_levels
+            else "urgent" if "urgent" in urgency_levels
+            else "routine"
+        )
+        final_recommendation = (
+            f"Based on the diagnostic council's deliberation, the most likely diagnosis is "
+            f"**{consensus_diagnosis}** with {int(consensus_confidence * 100)}% confidence "
+            f"({consensus_strength.value} consensus). "
+            f"Recommended urgency: {most_urgent}."
+        )
+        dissenting = list({o.diagnosis for o in opinions if o.diagnosis != consensus_diagnosis})
+
+        return CouncilDeliberation(
+            case_id=case_id,
+            created_at=datetime.now(),
+            case_summary=case_summary,
+            opinions=opinions,
+            consensus_diagnosis=consensus_diagnosis,
+            consensus_strength=consensus_strength,
+            consensus_confidence=consensus_confidence,
+            discussion_summary=discussion,
+            final_recommendation=final_recommendation,
+            dissenting_opinions=dissenting,
+            pubmed_insights=pubmed_insights if pubmed_insights is not None
+                            else result.get("pubmed_insights", {}),
+        )
     
     def _generate_single_opinion(
         self,
         case_info: dict,
         opinion_id: str,
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        evidence_context: list[str] | None = None,
     ) -> DiagnosticOpinion:
         """
         Generate a single diagnostic opinion using the AI agent.
@@ -112,7 +363,7 @@ class DiagnosticCouncil:
         if self.agent is None:
             # Fallback to mock logic
             possible_diagnoses = self._get_possible_diagnoses(symptoms)
-            idx = int(opinion_id.split("-")[1]) % len(possible_diagnoses)
+            idx = int(opinion_id.rsplit("-", 1)[-1]) % len(possible_diagnoses)
             primary_diagnosis = possible_diagnoses[idx % len(possible_diagnoses)]
             confidence_base = 0.75 + (random.random() * 0.2)
             
@@ -150,6 +401,16 @@ Return EXACTLY ONE valid JSON object matching this exact schema and NOTHING ELSE
 
 Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
 
+        # Inject PubMed rare diagnoses context if available
+        if evidence_context:
+            rare_list = "\n".join(f"• {d}" for d in evidence_context)
+            prompt += (
+                f"\n\nPublished case report literature has identified these rare diagnoses "
+                f"for similar presentations:\n{rare_list}\n"
+                f"Consider whether any of these rare diagnoses fit this case better than "
+                f"the most common alternative."
+            )
+
         try:
             response_text = ""
             if hasattr(self.agent, 'process_query'):
@@ -185,7 +446,7 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
             # Fallback to mock data on JSON parse failure or agent error
             print(f"Error calling agent: {e}. Falling back to mock data.")
             possible_diagnoses = self._get_possible_diagnoses(symptoms)
-            idx = int(opinion_id.split("-")[1]) % len(possible_diagnoses)
+            idx = int(opinion_id.rsplit("-", 1)[-1]) % len(possible_diagnoses)
             primary_diagnosis = possible_diagnoses[idx % len(possible_diagnoses)]
             confidence_base = 0.75 + (random.random() * 0.2)
             
@@ -201,155 +462,16 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
     
     def _get_possible_diagnoses(self, symptoms: list[str]) -> list[dict]:
         """Get possible diagnoses based on symptoms."""
-        symptom_str = " ".join(symptoms).lower()
-        
-        diagnoses = []
-        
-        if "chest pain" in symptom_str or "shortness of breath" in symptom_str:
-            diagnoses.extend([
-                {
-                    "name": "Acute Coronary Syndrome",
-                    "reasoning": "Chest pain with cardiac risk factors warrants immediate cardiac workup",
-                    "tests": ["Troponin", "ECG", "Chest X-ray"],
-                    "urgency": "emergent",
-                    "confidence_boost": 0.1
-                },
-                {
-                    "name": "Pulmonary Embolism",
-                    "reasoning": "Sudden onset dyspnea with chest pain suggests PE until proven otherwise",
-                    "tests": ["D-dimer", "CT-PA", "Lower extremity doppler"],
-                    "urgency": "emergent",
-                    "confidence_boost": 0.05
-                },
-                {
-                    "name": "Pneumonia",
-                    "reasoning": "Respiratory symptoms may indicate infectious etiology",
-                    "tests": ["Chest X-ray", "CBC", "Procalcitonin"],
-                    "urgency": "urgent",
-                    "confidence_boost": 0
-                }
-            ])
-        
-        if "cough" in symptom_str or "fever" in symptom_str:
-            diagnoses.extend([
-                {
-                    "name": "Community-Acquired Pneumonia",
-                    "reasoning": "Cough with fever classic presentation for pneumonia",
-                    "tests": ["Chest X-ray", "CBC", "Sputum culture"],
-                    "urgency": "urgent",
-                    "confidence_boost": 0.08
-                },
-                {
-                    "name": "Acute Bronchitis",
-                    "reasoning": "Cough without significant fever may be viral bronchitis",
-                    "tests": ["Clinical diagnosis", "Chest X-ray if needed"],
-                    "urgency": "routine",
-                    "confidence_boost": 0
-                }
-            ])
-        
-        if "headache" in symptom_str:
-            diagnoses.extend([
-                {
-                    "name": "Tension Headache",
-                    "reasoning": "Most common cause of headache, bilateral and mild-moderate",
-                    "tests": ["Clinical diagnosis"],
-                    "urgency": "routine",
-                    "confidence_boost": 0
-                },
-                {
-                    "name": "Migraine",
-                    "reasoning": "Recurrent headache with associated symptoms suggests migraine",
-                    "tests": ["Clinical diagnosis", "Consider MRI if atypical"],
-                    "urgency": "routine",
-                    "confidence_boost": 0.05
-                }
-            ])
-        
-        # Default if no specific symptoms matched
-        if not diagnoses:
-            diagnoses = [
-                {
-                    "name": "Further Evaluation Needed",
-                    "reasoning": "Insufficient information for definitive diagnosis",
-                    "tests": ["Comprehensive metabolic panel", "CBC"],
-                    "urgency": "routine",
-                    "confidence_boost": -0.2
-                }
-            ]
-        
-        return diagnoses
-    
+        return _get_diagnoses(symptoms)
+
     def _calculate_consensus(self, opinions: list[DiagnosticOpinion]) -> tuple[str | None, ConsensusStrength, float]:
         """Calculate consensus from multiple opinions."""
-        if not opinions:
-            return None, ConsensusStrength.SPLIT, 0.0
-        
-        # Count diagnosis frequencies
-        diagnosis_counts = {}
-        diagnosis_confidences = {}
-        
-        for opinion in opinions:
-            diag = opinion.diagnosis
-            diagnosis_counts[diag] = diagnosis_counts.get(diag, 0) + 1
-            if diag not in diagnosis_confidences:
-                diagnosis_confidences[diag] = []
-            diagnosis_confidences[diag].append(opinion.confidence)
-        
-        # Find most common diagnosis
-        max_count = max(diagnosis_counts.values())
-        agreement_rate = max_count / len(opinions)
-        
-        top_diagnosis = max(diagnosis_counts.keys(), key=lambda d: diagnosis_counts[d])
-        avg_confidence = sum(diagnosis_confidences[top_diagnosis]) / len(diagnosis_confidences[top_diagnosis])
-        
-        # Determine consensus strength
-        if agreement_rate > 0.8:
-            strength = ConsensusStrength.STRONG
-        elif agreement_rate >= 0.6:
-            strength = ConsensusStrength.MODERATE
-        elif agreement_rate >= 0.4:
-            strength = ConsensusStrength.WEAK
-        else:
-            strength = ConsensusStrength.SPLIT
-        
-        return top_diagnosis, strength, avg_confidence
-    
+        return _calc_consensus(opinions)
+
     def _synthesize_discussion(self, opinions: list[DiagnosticOpinion], consensus: str) -> str:
         """Synthesize a discussion summary from the opinions."""
-        agreeing = [o for o in opinions if o.diagnosis == consensus]
-        dissenting = [o for o in opinions if o.diagnosis != consensus]
-        
-        summary_parts = []
-        summary_parts.append(f"The council reviewed the case and generated {len(opinions)} independent analyses.")
-        
-        if agreeing:
-            summary_parts.append(
-                f"\n\n**Majority Opinion ({len(agreeing)}/{len(opinions)}):** "
-                f"The primary diagnosis of '{consensus}' was supported by {len(agreeing)} council members. "
-                f"Key reasoning: {agreeing[0].reasoning}"
-            )
-        
-        if dissenting:
-            summary_parts.append(
-                f"\n\n**Alternative Considerations:** "
-                f"{len(dissenting)} member(s) suggested alternative diagnoses including: "
-                f"{', '.join(set(o.diagnosis for o in dissenting))}. "
-                f"These should be considered in the differential."
-            )
-        
-        # Recommended tests from all opinions
-        all_tests = set()
-        for o in opinions:
-            all_tests.update(o.recommended_tests)
-        
-        summary_parts.append(
-            f"\n\n**Recommended Workup:** Based on the collective analysis, "
-            f"the following tests are recommended: {', '.join(sorted(all_tests))}."
-        )
-        
-        return "".join(summary_parts)
-    
+        return _synth_discussion(opinions, consensus)
+
     def deliberate(
         self,
         symptoms: list[str],
@@ -359,98 +481,206 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
     ) -> CouncilDeliberation:
         """
         Conduct a full diagnostic council deliberation.
-        
+
         Args:
             symptoms: List of presenting symptoms
             patient_history: Relevant patient history
             imaging_findings: Imaging results if available
             vitals: Current vital signs
-            
+
         Returns:
             CouncilDeliberation with consensus and all opinions
         """
+        from .graph import CouncilState
+
         case_id = f"CASE-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         case_info = {
             "symptoms": symptoms,
             "patient_history": patient_history,
             "imaging_findings": imaging_findings,
-            "vitals": vitals or {}
+            "vitals": vitals or {},
         }
-        
-        case_summary = f"Patient presenting with: {', '.join(symptoms)}. " \
-                       f"History: {patient_history or 'Not provided'}. " \
-                       f"Imaging: {imaging_findings or 'None available'}."
-        
-        # Generate multiple opinions
-        opinions = []
-        for i in range(self.num_rollouts):
-            temperature = 0.6 + (i * 0.1)  # Vary temperature for diversity
-            opinion = self._generate_single_opinion(
-                case_info,
-                f"OPINION-{i+1}",
-                temperature=min(temperature, 1.0)
-            )
-            opinions.append(opinion)
-        
-        # Calculate consensus
-        consensus_diagnosis, consensus_strength, consensus_confidence = self._calculate_consensus(opinions)
-        
-        # Get dissenting opinions
-        dissenting = [o.diagnosis for o in opinions if o.diagnosis != consensus_diagnosis]
-        
-        # Synthesize discussion
-        discussion = self._synthesize_discussion(opinions, consensus_diagnosis)
-        
-        # Generate final recommendation
-        urgency_levels = [o.urgency for o in opinions]
-        most_urgent = "emergent" if "emergent" in urgency_levels else \
-                      "urgent" if "urgent" in urgency_levels else "routine"
-        
-        final_recommendation = (
-            f"Based on the diagnostic council's deliberation, the most likely diagnosis is "
-            f"**{consensus_diagnosis}** with {int(consensus_confidence * 100)}% confidence "
-            f"({consensus_strength.value} consensus). "
-            f"Recommended urgency: {most_urgent}."
-        )
-        
-        deliberation = CouncilDeliberation(
-            case_id=case_id,
-            created_at=datetime.now(),
-            case_summary=case_summary,
-            opinions=opinions,
-            consensus_diagnosis=consensus_diagnosis,
-            consensus_strength=consensus_strength,
-            consensus_confidence=consensus_confidence,
-            discussion_summary=discussion,
-            final_recommendation=final_recommendation,
-            dissenting_opinions=list(set(dissenting))
+        case_summary = (
+            f"Patient presenting with: {', '.join(symptoms)}. "
+            f"History: {patient_history or 'Not provided'}. "
+            f"Imaging: {imaging_findings or 'None available'}."
         )
 
-        # ── PubMed Zebra Hunt — enrich with rare-diagnosis literature ──────────
-        if self.pubmed_agent is not None and symptoms:
-            try:
-                common = symptoms[:3]
-                atypical = symptoms[3:]
-                pm_result = self.pubmed_agent.case_matcher(
-                    common_symptoms=common,
-                    atypical_markers=atypical,
-                    max_results=4,
-                )
-                deliberation.pubmed_insights = {
-                    "status": "completed",
-                    "summary": pm_result.summary,
-                    "rare_diagnoses": pm_result.rare_diagnoses,
-                    "key_findings": pm_result.key_findings,
-                    "citation_list": pm_result.citation_list,
-                    "query_used": pm_result.query_used,
-                    "article_count": len(pm_result.articles),
-                }
-            except Exception as e:
-                deliberation.pubmed_insights = {"status": "error", "error": str(e)}
+        init_state: CouncilState = {
+            "case_info": case_info,
+            "num_rollouts": self.num_rollouts,
+            "mode": "standard",
+            "opinions": [],
+            "consensus_diagnosis": None,
+            "consensus_strength": "weak",
+            "consensus_confidence": 0.0,
+            "discussion_summary": "",
+            "pubmed_insights": {},
+            "rare_diagnoses": [],
+            "r2_opinions": [],
+            "r2_consensus_diagnosis": None,
+            "r2_consensus_strength": "weak",
+            "r2_consensus_confidence": 0.0,
+            "r2_discussion_summary": "",
+        }
 
+        result = self._get_graph().invoke(init_state)
+        deliberation = self._build_deliberation(case_id, case_summary, result)
         self.deliberation_history.append(deliberation)
         return deliberation
-    
+
+    def iterative_deliberate(
+        self,
+        symptoms: list[str],
+        patient_history: str = "",
+        imaging_findings: str = "",
+        vitals: dict | None = None,
+    ) -> "IterativeDeliberation":
+        """
+        2-round iterative deliberation with PubMed evidence feedback.
+
+        Round 1: Standard deliberation — generates consensus + PubMed rare diagnoses.
+        Round 2: Re-deliberates with rare diagnoses injected into opinion prompts.
+        Returns an IterativeDeliberation showing whether consensus shifted.
+        """
+        from .graph import CouncilState
+
+        case_id = f"ITER-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        case_info = {
+            "symptoms": symptoms,
+            "patient_history": patient_history,
+            "imaging_findings": imaging_findings,
+            "vitals": vitals or {},
+        }
+        case_summary = (
+            f"Patient presenting with: {', '.join(symptoms)}. "
+            f"History: {patient_history or 'Not provided'}. "
+            f"Imaging: {imaging_findings or 'None available'}."
+        )
+
+        init_state: CouncilState = {
+            "case_info": case_info,
+            "num_rollouts": self.num_rollouts,
+            "mode": "iterative",
+            "opinions": [],
+            "consensus_diagnosis": None,
+            "consensus_strength": "weak",
+            "consensus_confidence": 0.0,
+            "discussion_summary": "",
+            "pubmed_insights": {},
+            "rare_diagnoses": [],
+            "r2_opinions": [],
+            "r2_consensus_diagnosis": None,
+            "r2_consensus_strength": "weak",
+            "r2_consensus_confidence": 0.0,
+            "r2_discussion_summary": "",
+        }
+
+        result = self._get_graph().invoke(init_state)
+
+        # ── Round 1 deliberation ─────────────────────────────────────────────
+        round1 = self._build_deliberation(case_id + "-R1", case_summary, result)
+
+        rare_diagnoses: list[str] = result.get("rare_diagnoses", [])
+        r2_opinion_dicts: list[dict] = result.get("r2_opinions", [])
+
+        # ── No Round 2 (PubMed returned no rare diagnoses) ──────────────────
+        if not r2_opinion_dicts:
+            return IterativeDeliberation(
+                case_id=case_id,
+                created_at=datetime.now(),
+                initial_consensus=round1.consensus_diagnosis or "Undetermined",
+                final_consensus=round1.consensus_diagnosis or "Undetermined",
+                consensus_shifted=False,
+                rare_diagnoses_injected=[],
+                rounds=[round1.to_dict()],
+                final_recommendation=round1.final_recommendation,
+                discussion_summary=(
+                    "Round 2 skipped: PubMed returned no rare diagnosis candidates "
+                    "for this symptom cluster."
+                ),
+            )
+
+        # ── Round 2 deliberation ─────────────────────────────────────────────
+        r2_opinions = [
+            DiagnosticOpinion(
+                opinion_id=o["opinion_id"],
+                diagnosis=o["diagnosis"],
+                confidence=o["confidence"],
+                reasoning=o["reasoning"],
+                differential_diagnoses=o.get("differential_diagnoses", []),
+                recommended_tests=o.get("recommended_tests", []),
+                urgency=o["urgency"],
+            )
+            for o in r2_opinion_dicts
+        ]
+        r2_consensus = result.get("r2_consensus_diagnosis")
+        r2_strength = ConsensusStrength(result.get("r2_consensus_strength", "weak"))
+        r2_confidence = float(result.get("r2_consensus_confidence", 0.0))
+        r2_discussion = result.get("r2_discussion_summary", "")
+
+        urgency_levels = [o.urgency for o in r2_opinions]
+        most_urgent = (
+            "emergent" if "emergent" in urgency_levels
+            else "urgent" if "urgent" in urgency_levels
+            else "routine"
+        )
+        round2_recommendation = (
+            f"Based on evidence-informed deliberation, the most likely diagnosis is "
+            f"**{r2_consensus}** with {int(r2_confidence * 100)}% confidence "
+            f"({r2_strength.value} consensus). "
+            f"Recommended urgency: {most_urgent}. "
+            f"PubMed literature considered {len(rare_diagnoses)} rare diagnosis candidate(s)."
+        )
+
+        round2 = CouncilDeliberation(
+            case_id=case_id + "-R2",
+            created_at=datetime.now(),
+            case_summary=case_summary,
+            opinions=r2_opinions,
+            consensus_diagnosis=r2_consensus,
+            consensus_strength=r2_strength,
+            consensus_confidence=r2_confidence,
+            discussion_summary=r2_discussion,
+            final_recommendation=round2_recommendation,
+            dissenting_opinions=list(
+                {o.diagnosis for o in r2_opinions if o.diagnosis != r2_consensus}
+            ),
+            pubmed_insights=round1.pubmed_insights,
+        )
+
+        # ── Summarise evolution ──────────────────────────────────────────────
+        consensus_shifted = (
+            r2_consensus is not None
+            and round1.consensus_diagnosis is not None
+            and r2_consensus.lower() != round1.consensus_diagnosis.lower()
+        )
+
+        summary = (
+            f"Round 1 consensus: {round1.consensus_diagnosis} "
+            f"({round1.consensus_strength.value}).\n"
+            f"PubMed surfaced {len(rare_diagnoses)} rare diagnosis candidate(s).\n"
+            f"Round 2 consensus after evidence injection: {r2_consensus} "
+            f"({r2_strength.value}).\n"
+            + (
+                "Consensus SHIFTED — rare diagnosis promoted to leading hypothesis."
+                if consensus_shifted else
+                "Consensus held — original diagnosis reinforced by literature review."
+            )
+        )
+
+        return IterativeDeliberation(
+            case_id=case_id,
+            created_at=datetime.now(),
+            initial_consensus=round1.consensus_diagnosis or "Undetermined",
+            final_consensus=r2_consensus or "Undetermined",
+            consensus_shifted=consensus_shifted,
+            rare_diagnoses_injected=rare_diagnoses,
+            rounds=[round1.to_dict(), round2.to_dict()],
+            final_recommendation=round2_recommendation,
+            discussion_summary=summary,
+        )
+
     def get_deliberation_history(self) -> list[dict]:
         """Get all past deliberations."""
         return [d.to_dict() for d in self.deliberation_history]
@@ -467,6 +697,8 @@ def get_diagnostic_council(agent=None, num_rollouts: int = 5, pubmed_agent=None)
     else:
         if agent is not None and _council.agent is None:
             _council.agent = agent
+            _council._graph = None  # reset graph so it picks up the new agent
         if pubmed_agent is not None and _council.pubmed_agent is None:
             _council.pubmed_agent = pubmed_agent
+            _council._graph = None  # reset graph so it picks up the new pubmed_agent
     return _council

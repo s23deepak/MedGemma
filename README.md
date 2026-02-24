@@ -30,6 +30,10 @@ Open: http://localhost:8000
 - 👤 **Patient Portal** — Patient-facing Q&A with emergency detection and safety guardrails
 - 🧬 **Patient Memory (Mem0)** — Persistent cross-encounter memory powered by Mem0
 - 🔐 **Role-Based Access** — Doctor, Nurse, Resident, Admin, and Patient roles
+- 🔄 **Inpatient Rounding Copilot** — 24-hour SOAP progress notes with to-do checklists per admitted patient
+- 📋 **SBAR Handoff Generator** — Structured shift sign-out with automated completeness audit (code status, allergies, high-risk meds, contingency plans)
+- 🚨 **Inpatient Safety Watchlist** — Rule-based alerts for VTE prophylaxis gaps, Foley dwell time, high-risk med monitoring, and overdue documentation
+- 🏠 **Discharge Planner** — Patient-friendly discharge summaries with readmission risk scoring (HIGH/MEDIUM/LOW) and MISSING-field enforcement
 
 ## Architecture
 
@@ -60,6 +64,7 @@ Medical Image ───┘         ↑                     ↑
 │   ├── portal/           # Patient-facing portal with guardrails
 │   ├── pubmed/           # PubMed NCBI E-utils client + synthesis agent
 │   ├── trends/           # Local health trends + external medical vocabulary
+│   ├── inpatient/        # Rounding, SBAR handoff, safety watchlist, discharge planner
 │   └── soap/             # SOAP note generation
 ├── static/               # Frontend UI (app.js, ai_portal.js, styles.css)
 ├── templates/            # Jinja2 HTML templates

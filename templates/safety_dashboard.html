@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Safety Watchlist | MedGemma</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        .safety-container { max-width: 1100px; margin: 0 auto; padding: 2rem; }
+
+        /* Top toolbar */
+        .toolbar {
+            display: flex; gap: 1rem; align-items: flex-end;
+            flex-wrap: wrap; margin-bottom: 2rem;
+        }
+        .toolbar-group { display: flex; flex-direction: column; gap: 0.4rem; }
+        .toolbar-group label {
+            font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 0.05em;
+        }
+        .toolbar-group select {
+            padding: 0.65rem 1rem; border: 1px solid var(--border);
+            border-radius: 8px; background: var(--bg-primary);
+            color: var(--text-primary); font-family: inherit; font-size: 0.9rem;
+        }
+        .btn-run {
+            padding: 0.65rem 1.75rem;
+            background: linear-gradient(135deg, var(--primary), #1d4ed8);
+            color: white; border: none; border-radius: 8px;
+            font-weight: 600; cursor: pointer; font-size: 0.9rem;
+            transition: opacity 0.2s; white-space: nowrap;
+        }
+        .btn-run:hover { opacity: 0.9; }
+        .btn-run:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        /* Stats row */
+        .stats-row {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 1rem; margin-bottom: 2rem;
+        }
+        .stat-card {
+            background: var(--bg-secondary); border-radius: 12px;
+            padding: 1.25rem 1.5rem; box-shadow: var(--shadow-sm); text-align: center;
+        }
+        .stat-value { font-size: 2rem; font-weight: 700; line-height: 1; }
+        .stat-label {
+            font-size: 0.78rem; font-weight: 600; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.3rem;
+        }
+        .stat-card.critical .stat-value { color: #dc2626; }
+        .stat-card.warning  .stat-value { color: #d97706; }
+        .stat-card.ok       .stat-value { color: #16a34a; }
+        .stat-card.neutral  .stat-value { color: var(--text-primary); }
+
+        /* Alert section headers */
+        .section-header {
+            display: flex; align-items: center; gap: 0.6rem;
+            margin: 1.5rem 0 0.75rem; font-size: 0.9rem; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.06em;
+        }
+        .section-header.critical { color: #dc2626; }
+        .section-header.warning  { color: #d97706; }
+        .section-dot {
+            width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+        }
+        .critical .section-dot { background: #dc2626; }
+        .warning  .section-dot { background: #d97706; }
+
+        /* Alert cards */
+        .alert-card {
+            background: var(--bg-secondary); border-radius: 12px;
+            padding: 1.25rem 1.5rem; margin-bottom: 0.75rem;
+            box-shadow: var(--shadow-sm); border-left: 5px solid;
+        }
+        .alert-card.critical { border-color: #ef4444; }
+        .alert-card.warning  { border-color: #f59e0b; }
+
+        .alert-top {
+            display: flex; justify-content: space-between; align-items: flex-start;
+            gap: 1rem; flex-wrap: wrap;
+        }
+        .alert-title { font-size: 1rem; font-weight: 600; margin: 0 0 0.2rem; }
+        .alert-meta {
+            font-size: 0.8rem; color: var(--text-secondary);
+            display: flex; gap: 0.75rem; flex-wrap: wrap;
+        }
+        .alert-meta span { display: flex; align-items: center; gap: 0.25rem; }
+
+        .severity-chip {
+            font-size: 0.72rem; font-weight: 700; padding: 0.2rem 0.7rem;
+            border-radius: 20px; white-space: nowrap; flex-shrink: 0;
+        }
+        .severity-chip.critical { background: #fee2e2; color: #b91c1c; }
+        .severity-chip.warning  { background: #fef3c7; color: #92400e; }
+
+        .alert-detail {
+            font-size: 0.85rem; color: var(--text-secondary);
+            margin: 0.6rem 0 0; line-height: 1.55;
+        }
+        .alert-action {
+            margin-top: 0.6rem; padding: 0.6rem 0.8rem;
+            background: var(--bg-primary); border-radius: 8px;
+            font-size: 0.83rem; color: var(--text-primary); line-height: 1.5;
+            border: 1px solid var(--border);
+        }
+        .alert-action-label {
+            font-size: 0.72rem; font-weight: 700; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem;
+        }
+
+        /* AI explanation section */
+        .ai-section { margin-top: 0.75rem; }
+        .btn-explain {
+            font-size: 0.8rem; padding: 0.35rem 0.9rem;
+            background: transparent; border: 1px solid var(--border);
+            border-radius: 6px; cursor: pointer; color: var(--text-secondary);
+            font-family: inherit; transition: background 0.2s, color 0.2s;
+        }
+        .btn-explain:hover { background: var(--bg-primary); color: var(--text-primary); }
+        .btn-explain:disabled { opacity: 0.5; cursor: not-allowed; }
+        .ai-explanation {
+            margin-top: 0.5rem; padding: 0.75rem 1rem;
+            background: #f0f9ff; border-radius: 8px; border-left: 3px solid #38bdf8;
+            font-size: 0.85rem; line-height: 1.6; color: var(--text-primary);
+            white-space: pre-wrap; display: none;
+        }
+        .ai-explanation.visible { display: block; }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center; padding: 3rem 1rem;
+            color: var(--text-secondary);
+        }
+        .empty-state .icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+        .empty-state h3 { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.4rem; color: var(--text-primary); }
+        .empty-state p  { font-size: 0.88rem; margin: 0; }
+
+        .loading-spinner {
+            display: inline-block; width: 14px; height: 14px;
+            border: 2px solid rgba(255,255,255,0.3); border-top-color: white;
+            border-radius: 50%; animation: spin 0.7s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        #dashboard { display: none; }
+        #dashboard.visible { display: block; }
+    </style>
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-left">
+            <a href="/" class="logo" style="text-decoration:none;">
+                <span class="logo-icon">⚕</span>
+                <span class="logo-text">MedGemma</span>
+            </a>
+            <div class="nav-links">
+                <a href="/">Encounters</a>
+                <a href="/rounding">Rounding</a>
+                <a href="/handoff">Handoff</a>
+                <a href="/safety-dashboard" class="active">Safety</a>
+                <a href="/shift-brief">Shift Brief</a>
+                <a href="/history">Patient History</a>
+                <a href="/compliance">Compliance</a>
+                <a href="/council">Diagnostic Council</a>
+                <a href="/patient-portal">Patient Portal</a>
+                <a href="/ai-portal">AI Chat Portal</a>
+                <a href="/simulation">Simulation</a>
+            </div>
+        </div>
+        <div class="nav-user">
+            <span class="user-role">Clinical Staff</span>
+        </div>
+    </header>
+
+    <main class="safety-container">
+        <div style="margin-bottom:2rem">
+            <h1 style="font-size:1.7rem;font-weight:700;margin:0">Inpatient Safety Watchlist</h1>
+            <p style="color:var(--text-secondary);margin:0.3rem 0 0">
+                Rule-based safety checks: VTE prophylaxis, Foley dwell, high-risk medications, and documentation currency.
+            </p>
+        </div>
+
+        <!-- Toolbar -->
+        <div class="toolbar">
+            <div class="toolbar-group">
+                <label>Ward Filter</label>
+                <select id="ward-filter">
+                    <option value="">All Wards</option>
+                    <option value="ICU">ICU</option>
+                    <option value="Cardiology">Cardiology</option>
+                    <option value="General Medicine">General Medicine</option>
+                    <option value="Oncology">Oncology</option>
+                </select>
+            </div>
+            <button class="btn-run" id="btn-run" onclick="runSafetyChecks()">
+                Run Safety Checks
+            </button>
+        </div>
+
+        <!-- Stats row (hidden until first run) -->
+        <div id="dashboard">
+            <div class="stats-row" id="stats-row"></div>
+            <div id="alerts-section"></div>
+        </div>
+    </main>
+
+    <script>
+        async function runSafetyChecks() {
+            const ward = document.getElementById('ward-filter').value;
+            const btn = document.getElementById('btn-run');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> Checking…';
+
+            try {
+                const url = ward
+                    ? `/api/inpatient/safety?ward=${encodeURIComponent(ward)}`
+                    : '/api/inpatient/safety';
+                const res = await fetch(url);
+                const data = await res.json();
+                renderDashboard(data);
+                document.getElementById('dashboard').classList.add('visible');
+            } catch (err) {
+                alert('Error: ' + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Re-run Safety Checks';
+            }
+        }
+
+        function renderDashboard(data) {
+            // Stats
+            const total    = data.inpatients_checked || 0;
+            const critical = data.critical_count     || 0;
+            const warnings = data.warning_count      || 0;
+            const alerts   = data.total_alerts       || 0;
+            const safePct  = total > 0 ? Math.round(((total - Object.keys(data.alerts_by_patient || {}).length) / total) * 100) : 100;
+
+            document.getElementById('stats-row').innerHTML = `
+                <div class="stat-card neutral">
+                    <div class="stat-value">${total}</div>
+                    <div class="stat-label">Inpatients Checked</div>
+                </div>
+                <div class="stat-card ${critical > 0 ? 'critical' : 'ok'}">
+                    <div class="stat-value">${critical}</div>
+                    <div class="stat-label">Critical Alerts</div>
+                </div>
+                <div class="stat-card ${warnings > 0 ? 'warning' : 'ok'}">
+                    <div class="stat-value">${warnings}</div>
+                    <div class="stat-label">Warnings</div>
+                </div>
+                <div class="stat-card ${safePct === 100 ? 'ok' : safePct >= 75 ? 'warning' : 'critical'}">
+                    <div class="stat-value">${safePct}%</div>
+                    <div class="stat-label">No Active Alerts</div>
+                </div>
+            `;
+
+            // Alerts
+            const allAlerts = data.all_alerts || [];
+            const container = document.getElementById('alerts-section');
+
+            if (allAlerts.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="icon">✓</div>
+                        <h3>No Safety Alerts</h3>
+                        <p>All ${total} admitted patient(s) passed safety checks.</p>
+                    </div>`;
+                return;
+            }
+
+            const criticals = allAlerts.filter(a => a.severity === 'critical');
+            const warns     = allAlerts.filter(a => a.severity === 'warning');
+
+            let html = '';
+            if (criticals.length) {
+                html += `<div class="section-header critical">
+                    <span class="section-dot"></span>Critical Alerts (${criticals.length})
+                </div>`;
+                criticals.forEach(a => { html += alertCardHtml(a); });
+            }
+            if (warns.length) {
+                html += `<div class="section-header warning">
+                    <span class="section-dot"></span>Warnings (${warns.length})
+                </div>`;
+                warns.forEach(a => { html += alertCardHtml(a); });
+            }
+            container.innerHTML = html;
+        }
+
+        function alertCardHtml(a) {
+            const ts = a.triggered_at ? a.triggered_at.replace('T', ' ').slice(0, 16) : '';
+            return `
+            <div class="alert-card ${a.severity}" id="card-${a.alert_id}">
+                <div class="alert-top">
+                    <div>
+                        <div class="alert-title">${escapeHtml(a.patient_name)} — ${escapeHtml(a.title)}</div>
+                        <div class="alert-meta">
+                            <span>Ward: ${escapeHtml(a.ward)}</span>
+                            <span>Rule: ${escapeHtml(a.rule_id)}</span>
+                            ${ts ? `<span>Triggered: ${ts}</span>` : ''}
+                        </div>
+                    </div>
+                    <span class="severity-chip ${a.severity}">${a.severity.toUpperCase()}</span>
+                </div>
+
+                <div class="alert-detail">${escapeHtml(a.detail)}</div>
+
+                <div class="alert-action">
+                    <div class="alert-action-label">Suggested Action</div>
+                    ${escapeHtml(a.suggested_action)}
+                </div>
+
+                <div class="ai-section">
+                    ${a.ai_explanation
+                        ? `<div class="ai-explanation visible">${escapeHtml(a.ai_explanation)}</div>`
+                        : `<button class="btn-explain"
+                                onclick="fetchExplanation('${a.patient_id}', '${a.alert_id}', this)"
+                           >MedGemma Explanation</button>
+                           <div class="ai-explanation" id="exp-${a.alert_id}"></div>`
+                    }
+                </div>
+            </div>`;
+        }
+
+        async function fetchExplanation(patientId, alertId, btn) {
+            btn.disabled = true;
+            btn.textContent = 'Generating…';
+            try {
+                const res = await fetch(`/api/inpatient/${patientId}/safety`);
+                const data = await res.json();
+                const alerts = data.alerts || [];
+                const match = alerts.find(a => a.alert_id === alertId);
+                const expDiv = document.getElementById('exp-' + alertId);
+                if (match && match.ai_explanation) {
+                    expDiv.textContent = match.ai_explanation;
+                    expDiv.classList.add('visible');
+                    btn.style.display = 'none';
+                } else {
+                    expDiv.textContent = 'No AI explanation available (simulated mode).';
+                    expDiv.classList.add('visible');
+                    btn.style.display = 'none';
+                }
+            } catch (err) {
+                btn.disabled = false;
+                btn.textContent = 'MedGemma Explanation';
+                alert('Error: ' + err.message);
+            }
+        }
+
+        function escapeHtml(str) {
+            return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        // Auto-run on load
+        runSafetyChecks();
+    </script>
+</body>
+</html>

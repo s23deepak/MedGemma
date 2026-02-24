@@ -269,6 +269,37 @@
             background: #d1fae5;
             color: #059669;
         }
+
+        .btn-deep-dive {
+            width: 100%;
+            padding: 0.85rem;
+            background: transparent;
+            color: var(--primary);
+            border: 2px solid var(--primary);
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            font-weight: 700;
+            margin-top: 0.6rem;
+            font-family: inherit;
+            transition: all 0.15s;
+            letter-spacing: 0.01em;
+        }
+        .btn-deep-dive:hover { background: var(--primary); color: white; }
+        .btn-deep-dive:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .iter-shift-badge {
+            background: #fef3c7; color: #92400e; border: 1px solid #fcd34d;
+            border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.9rem; margin-bottom: 0.5rem;
+        }
+        .iter-stable-badge {
+            background: #d1fae5; color: #065f46; border: 1px solid #6ee7b7;
+            border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.9rem; margin-bottom: 0.5rem;
+        }
+        .iter-summary-card {
+            background: var(--bg-secondary); border-radius: 12px;
+            padding: 1.25rem 1.5rem; box-shadow: var(--shadow-sm); margin-bottom: 1.25rem;
+        }
     </style>
 </head>
 
@@ -277,17 +308,31 @@
         <header class="app-header">
             <div class="header-left">
                 <a href="/" class="logo" style="text-decoration:none;">
-                    <span class="logo-icon">🏥</span>
+                    <span class="logo-icon">⚕</span>
                     <span class="logo-text">MedGemma</span>
                 </a>
                 <div class="nav-links">
+
                     <a href="/">Encounters</a>
-                    <a href="/history">Patient History</a>
-                    <a href="/compliance">Compliance</a>
-                    <a href="/council" class="active">Diagnostic Council</a>
-                    <a href="/patient-portal">Patient Portal</a>
-                    <a href="/ai-portal">AI Chat Portal</a>
+
+                    <a href="/rounding">Rounding</a>
+
+                    <a href="/handoff">Handoff</a>
+
+                    <a href="/safety-dashboard">Safety</a>
+
                     <a href="/shift-brief">Shift Brief</a>
+
+                    <a href="/history">Patient History</a>
+
+                    <a href="/compliance">Compliance</a>
+
+                    <a href="/council" class="active">Diagnostic Council</a>
+
+                    <a href="/patient-portal">Patient Portal</a>
+
+                    <a href="/ai-portal">AI Chat Portal</a>
+
                     <a href="/simulation">Simulation</a>
                 </div>
             </div>
@@ -343,6 +388,9 @@
                 <button class="btn-deliberate" id="deliberateBtn" onclick="startDeliberation()">
                     🧠 Start Council Deliberation
                 </button>
+                <button class="btn-deep-dive" id="deepDiveBtn" onclick="startIterativeDeliberation()">
+                    🔄 Deep Dive (2-Round Evidence Loop)
+                </button>
             </section>
 
             <section id="results" style="display: none;">
@@ -379,6 +427,16 @@
                         <div id="pubmedInsightsContent"></div>
                     </div>
                 </div>
+            </section>
+
+            <section id="iterative-output" style="display:none; margin-top:2rem;">
+                <h2 style="margin-bottom:1rem;">🔬 Iterative Evidence Loop Results</h2>
+                <div id="iter-loading" class="loading" style="display:none;">
+                    <div class="spinner"></div>
+                    <p>Running 2-round evidence-informed deliberation…</p>
+                </div>
+                <div id="iter-summary-card" class="iter-summary-card" style="display:none;"></div>
+                <div id="iter-rounds"></div>
             </section>
         </main>
 
@@ -571,6 +629,149 @@
                 }
 
                 return html;
+            }
+
+            function getFormPayload() {
+                return {
+                    symptoms: document.getElementById('symptoms').value.split(',').map(s => s.trim()).filter(s => s),
+                    patient_history: document.getElementById('history').value,
+                    imaging_findings: document.getElementById('imaging').value,
+                    num_rollouts: parseInt(document.getElementById('numRollouts').value),
+                    vitals: document.getElementById('vitals').value,
+                };
+            }
+
+            async function startIterativeDeliberation() {
+                const payload = getFormPayload();
+                if (!payload.symptoms.length) {
+                    alert('Please enter at least one symptom');
+                    return;
+                }
+
+                const btn = document.getElementById('deepDiveBtn');
+                btn.disabled = true;
+                btn.textContent = '⏳ Running 2-Round Analysis…';
+
+                const outSection = document.getElementById('iterative-output');
+                const loadingEl = document.getElementById('iter-loading');
+                const summaryEl = document.getElementById('iter-summary-card');
+                const roundsEl = document.getElementById('iter-rounds');
+
+                outSection.style.display = 'block';
+                loadingEl.style.display = 'block';
+                summaryEl.style.display = 'none';
+                roundsEl.innerHTML = '';
+
+                try {
+                    const res = await fetch('/api/council/iterative-deliberate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                    const data = await res.json();
+                    if (data.error) { alert('Error: ' + data.error); return; }
+                    renderIterativeResult(data);
+                } catch (err) {
+                    alert('Error: ' + err.message);
+                } finally {
+                    loadingEl.style.display = 'none';
+                    btn.disabled = false;
+                    btn.textContent = '🔄 Deep Dive (2-Round Evidence Loop)';
+                }
+            }
+
+            function renderIterativeResult(data) {
+                const summaryEl = document.getElementById('iter-summary-card');
+                const roundsEl = document.getElementById('iter-rounds');
+
+                // Evolution banner
+                const shifted = data.consensus_shifted;
+                const bannerClass = shifted ? 'iter-shift-badge' : 'iter-stable-badge';
+                const bannerIcon = shifted ? '⚡' : '✓';
+                const bannerText = shifted
+                    ? `${bannerIcon} Consensus shifted: <b>${escapeHtml(data.initial_consensus)}</b> → <b>${escapeHtml(data.final_consensus)}</b>`
+                    : `${bannerIcon} Consensus held: <b>${escapeHtml(data.final_consensus)}</b>`;
+
+                // Rare diagnoses injected
+                const rareItems = (data.rare_diagnoses_injected || [])
+                    .map(d => `<li>${escapeHtml(d)}</li>`).join('');
+
+                summaryEl.innerHTML = `
+                    <div class="${bannerClass}">${bannerText}</div>
+                    <p style="margin:0.5rem 0 0; font-size:0.88rem; white-space:pre-line;">${escapeHtml(data.discussion_summary)}</p>
+                    ${rareItems ? `<div style="margin-top:0.75rem;">
+                        <strong style="font-size:0.8rem; color:var(--text-secondary);">
+                            Literature evidence injected in Round 2:
+                        </strong>
+                        <ul style="margin:0.3rem 0 0 1rem; font-size:0.85rem;">${rareItems}</ul>
+                    </div>` : ''}
+                `;
+                summaryEl.style.display = 'block';
+
+                // Render collapsible rounds
+                roundsEl.innerHTML = data.rounds.map((r, i) => {
+                    const label = i === 0 ? 'Round 1 — Initial Deliberation' : 'Round 2 — Evidence-Informed Deliberation';
+                    const isLast = i === data.rounds.length - 1;
+                    return `<details ${isLast ? 'open' : ''} style="margin-bottom:1rem;">
+                        <summary style="cursor:pointer; font-size:1rem; font-weight:700;
+                                        padding:0.75rem 0; color:var(--text-primary);">
+                            ${label}
+                        </summary>
+                        <div style="margin-top:0.5rem;">${buildDeliberationHTML(r)}</div>
+                    </details>`;
+                }).join('');
+            }
+
+            function buildDeliberationHTML(data) {
+                const strengthColors = {
+                    strong: 'linear-gradient(135deg, #059669, #10b981)',
+                    moderate: 'linear-gradient(135deg, #d97706, #f59e0b)',
+                    weak: 'linear-gradient(135deg, #dc2626, #ef4444)',
+                    split: 'linear-gradient(135deg, #dc2626, #ef4444)',
+                };
+                const bgColor = strengthColors[data.consensus_strength] || strengthColors.weak;
+
+                const opinionsHTML = (data.opinions || []).map(op => {
+                    const agreed = op.diagnosis === data.consensus_diagnosis;
+                    return `<div class="opinion-card ${agreed ? 'agreed' : 'dissented'}" style="font-size:0.9rem;">
+                        <div class="opinion-header">
+                            <span class="opinion-id">${op.opinion_id}</span>
+                            <span class="urgency-badge urgency-${op.urgency}">${op.urgency}</span>
+                        </div>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width:${op.confidence * 100}%"></div>
+                        </div>
+                        <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.2rem;">${op.confidence_percent} confidence</div>
+                        <div class="opinion-diagnosis">${escapeHtml(op.diagnosis)}</div>
+                        <div class="opinion-reasoning">${escapeHtml(op.reasoning)}</div>
+                    </div>`;
+                }).join('');
+
+                const pm = data.pubmed_insights;
+                const pmHTML = pm && pm.status === 'completed'
+                    ? `<div style="background:#eff6ff;border:1px solid #c7d2fe;border-radius:10px;
+                                   padding:1rem;margin-top:1rem;">
+                           <strong style="font-size:0.85rem;color:#4338ca;">📚 PubMed Rare Diagnoses</strong>
+                           ${renderPubmedInsightsCouncil(pm)}
+                       </div>`
+                    : '';
+
+                return `
+                    <div class="consensus-card" style="background:${bgColor};margin-bottom:1rem;">
+                        <div style="font-size:0.8rem;opacity:0.9;margin-bottom:0.3rem;">CONSENSUS DIAGNOSIS</div>
+                        <div class="consensus-diagnosis">${escapeHtml(data.consensus_diagnosis || 'Undetermined')}</div>
+                        <div class="consensus-meta">
+                            <span class="consensus-badge">${escapeHtml(data.consensus_strength)} consensus</span>
+                            <span class="consensus-badge">${data.consensus_confidence_percent} confidence</span>
+                        </div>
+                    </div>
+                    <div class="opinions-grid" style="margin-bottom:1rem;">${opinionsHTML}</div>
+                    ${pmHTML}
+                `;
+            }
+
+            function escapeHtml(str) {
+                return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
             }
         </script>
 <footer class="app-footer">

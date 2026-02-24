@@ -7,6 +7,7 @@ Usage:
 """
 
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Add project root to path
@@ -306,11 +307,267 @@ def main():
     
     print("\n📅 Seeding appointments...")
     seed_appointments(db)
-    
+
+    print("\n🏥 Seeding inpatients...")
+    seed_inpatients(db)
+
     print("\n" + "=" * 50)
     print("✅ All data seeded successfully!")
     print("   Run: uv run python main.py --use-vllm")
     print("=" * 50)
+
+
+def seed_inpatients(db):
+    """Seed inpatient demo patients P004 and P005 with clinical + orders + notes."""
+    now = datetime.now()
+    admission_p004 = (now - timedelta(hours=36)).isoformat()
+    admission_p005 = (now - timedelta(days=4)).isoformat()
+
+    # --- Root patient documents ---
+    inpatients = {
+        "P004": {
+            "name": "Raymond Okafor",
+            "gender": "male",
+            "birthDate": "1972-04-18",
+            "city": "Houston",
+            "state": "TX",
+            "encounter_type": "inpatient",
+            "admission_date": admission_p004,
+            "ward": "ICU",
+            "bed": "ICU-04",
+            "code_status": "Full Code",
+            "attending": "Dr. Sarah Smith",
+        },
+        "P005": {
+            "name": "Dorothy Chen",
+            "gender": "female",
+            "birthDate": "1949-09-03",
+            "city": "Seattle",
+            "state": "WA",
+            "encounter_type": "inpatient",
+            "admission_date": admission_p005,
+            "ward": "Cardiology",
+            "bed": "CARD-12",
+            "code_status": "DNR/DNI",
+            "attending": "Dr. Michael Jones",
+        },
+    }
+
+    for pid, data in inpatients.items():
+        db.collection("patients").document(pid).set(data)
+        print(f"  ✓ Inpatient {pid}: {data['name']}")
+
+    # --- Conditions ---
+    conditions = {
+        "P004": [
+            {"name": "Sepsis", "status": "active", "onset": admission_p004},
+            {"name": "Acute Kidney Injury", "status": "active", "onset": admission_p004},
+            {"name": "Hypertension", "status": "active", "onset": "2015-03-10"},
+        ],
+        "P005": [
+            {"name": "Congestive Heart Failure", "status": "active", "onset": "2020-06-01"},
+            {"name": "Atrial Fibrillation", "status": "active", "onset": "2021-09-15"},
+            {"name": "Chronic Kidney Disease Stage 3", "status": "active", "onset": "2022-11-20"},
+            {"name": "Hypertension", "status": "active", "onset": "2012-04-05"},
+        ],
+    }
+    for pid, conds in conditions.items():
+        clear_subcollection(db, pid, "conditions")
+        coll = db.collection("patients").document(pid).collection("conditions")
+        for i, c in enumerate(conds):
+            coll.document(str(i)).set(c)
+        print(f"  ✓ {pid}: {len(conds)} conditions")
+
+    # --- Medications ---
+    medications = {
+        "P004": [
+            {"name": "Piperacillin-Tazobactam 3.375g IV", "dosage": "q6h", "status": "active"},
+            {"name": "Norepinephrine", "dosage": "0.1 mcg/kg/min IV", "status": "active"},
+            {"name": "Vancomycin 1250mg IV", "dosage": "q12h", "status": "active"},
+        ],
+        "P005": [
+            {"name": "Furosemide 40mg IV", "dosage": "BID", "status": "active"},
+            {"name": "Metoprolol Succinate 25mg", "dosage": "Once daily", "status": "active"},
+            {"name": "Lisinopril 5mg", "dosage": "Once daily", "status": "active"},
+            {"name": "Spironolactone 25mg", "dosage": "Once daily", "status": "active"},
+            {"name": "Apixaban 5mg", "dosage": "Twice daily", "status": "active"},
+        ],
+    }
+    for pid, meds in medications.items():
+        clear_subcollection(db, pid, "medications")
+        coll = db.collection("patients").document(pid).collection("medications")
+        for i, m in enumerate(meds):
+            coll.document(str(i)).set(m)
+        print(f"  ✓ {pid}: {len(meds)} medications")
+
+    # --- Allergies ---
+    allergies = {
+        "P004": [
+            {"substance": "Penicillin", "reaction": "Rash", "severity": "moderate"},
+        ],
+        "P005": [
+            {"substance": "Aspirin", "reaction": "GI bleeding", "severity": "severe"},
+        ],
+    }
+    for pid, allgs in allergies.items():
+        clear_subcollection(db, pid, "allergies")
+        coll = db.collection("patients").document(pid).collection("allergies")
+        for i, a in enumerate(allgs):
+            coll.document(str(i)).set(a)
+        print(f"  ✓ {pid}: {len(allgs)} allergies")
+
+    # --- Observations ---
+    observations = {
+        "P004": [
+            {"type": "Temperature", "value": "38.9 C", "date": admission_p004},
+            {"type": "Blood Pressure", "value": "88/52 mmHg", "date": admission_p004},
+            {"type": "Heart Rate", "value": "118 bpm", "date": admission_p004},
+            {"type": "Creatinine", "value": "2.1 mg/dL", "date": admission_p004},
+        ],
+        "P005": [
+            {"type": "BNP", "value": "1840 pg/mL", "date": admission_p005},
+            {"type": "eGFR", "value": "38 mL/min/1.73m2", "date": admission_p005},
+            {"type": "Weight", "value": "84 kg (up 3 kg from baseline)", "date": admission_p005},
+            {"type": "Oxygen Saturation", "value": "94% on 2L nasal cannula", "date": admission_p005},
+        ],
+    }
+    for pid, obs in observations.items():
+        clear_subcollection(db, pid, "observations")
+        coll = db.collection("patients").document(pid).collection("observations")
+        for i, o in enumerate(obs):
+            coll.document(str(i)).set(o)
+        print(f"  ✓ {pid}: {len(obs)} observations")
+
+    # --- Active Orders ---
+    # P004: Pip-Tazo, Vancomycin, Foley — intentionally NO VTE prophylaxis (triggers CRITICAL)
+    # P005: Furosemide, Telemetry, Foley inserted 4 days ago (triggers Foley dwell WARNING)
+    active_orders = {
+        "P004": [
+            {
+                "order_id": "ORD-P004-001",
+                "type": "medication",
+                "name": "Piperacillin-Tazobactam 3.375g IV q6h",
+                "ordered_at": admission_p004,
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P004-002",
+                "type": "medication",
+                "name": "Vancomycin 1250mg IV q12h",
+                "ordered_at": admission_p004,
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P004-003",
+                "type": "device",
+                "name": "Foley catheter",
+                "ordered_at": admission_p004,
+                "inserted_at": admission_p004,
+                "status": "active",
+            },
+            # NOTE: No VTE prophylaxis order — intentional to trigger CRITICAL safety alert
+        ],
+        "P005": [
+            {
+                "order_id": "ORD-P005-001",
+                "type": "medication",
+                "name": "Furosemide 40mg IV BID",
+                "ordered_at": admission_p005,
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P005-002",
+                "type": "monitoring",
+                "name": "Continuous cardiac telemetry",
+                "ordered_at": admission_p005,
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P005-003",
+                "type": "device",
+                "name": "Foley catheter",
+                "ordered_at": admission_p005,
+                "inserted_at": admission_p005,
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P005-004",
+                "type": "medication",
+                "name": "Enoxaparin 40mg SC daily (VTE prophylaxis)",
+                "ordered_at": admission_p005,
+                "status": "active",
+            },
+        ],
+    }
+    for pid, orders in active_orders.items():
+        clear_subcollection(db, pid, "active_orders")
+        coll = db.collection("patients").document(pid).collection("active_orders")
+        for i, o in enumerate(orders):
+            coll.document(str(i)).set(o)
+        print(f"  ✓ {pid}: {len(orders)} active orders")
+
+    # --- Progress Notes ---
+    # P004: last note >26h ago → triggers "no note in 24h" WARNING
+    # P005: recent note within 12h → no warning
+    progress_notes = {
+        "P004": [
+            {
+                "note_id": "PN-P004-001",
+                "author": "Dr. Sarah Smith",
+                "role": "attending",
+                "created_at": admission_p004,
+                "note_text": (
+                    "62M admitted via ED with sepsis secondary to pneumonia. "
+                    "Hypotensive on arrival, started on vasopressors. "
+                    "Blood cultures drawn, empirical antibiotics initiated. "
+                    "Foley placed for strict I&Os. ICU-level monitoring."
+                ),
+            },
+            {
+                "note_id": "PN-P004-002",
+                "author": "Dr. Emily Lee",
+                "role": "resident",
+                "created_at": (now - timedelta(hours=26)).isoformat(),
+                "note_text": (
+                    "Overnight: hemodynamically marginal, MAP 62 on norepi 0.08. "
+                    "Urine output 20 mL/hr. Creatinine trending up to 2.3. "
+                    "Family updated on ICU course."
+                ),
+            },
+        ],
+        "P005": [
+            {
+                "note_id": "PN-P005-001",
+                "author": "Dr. Michael Jones",
+                "role": "attending",
+                "created_at": admission_p005,
+                "note_text": (
+                    "74F admitted with acute CHF exacerbation. "
+                    "BNP 1840, 3kg weight gain. IV diuresis initiated. "
+                    "AFib with RVR on admission, rate-controlled with metoprolol. "
+                    "CKD stage 3 — renal function monitoring daily."
+                ),
+            },
+            {
+                "note_id": "PN-P005-002",
+                "author": "Dr. Michael Jones",
+                "role": "attending",
+                "created_at": (now - timedelta(hours=10)).isoformat(),
+                "note_text": (
+                    "Day 4: Diuresis progressing well, -1.2 kg today. "
+                    "BNP downtrending. Rate controlled in 70s. "
+                    "Creatinine stable at 1.8. Consider discharge planning — "
+                    "social work consult for home health evaluation."
+                ),
+            },
+        ],
+    }
+    for pid, notes in progress_notes.items():
+        clear_subcollection(db, pid, "progress_notes")
+        coll = db.collection("patients").document(pid).collection("progress_notes")
+        for i, n in enumerate(notes):
+            coll.document(str(i)).set(n)
+        print(f"  ✓ {pid}: {len(notes)} progress notes")
 
 
 if __name__ == "__main__":
