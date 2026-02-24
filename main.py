@@ -1130,13 +1130,15 @@ async def council_deliberate(request: Request):
     imaging_findings = data.get("imaging_findings", "")
     num_rollouts = data.get("num_rollouts", 5)
     vitals = data.get("vitals")
-    
+    raw_note = data.get("raw_note", "")
+
     council = get_diagnostic_council(agent=agent, num_rollouts=num_rollouts, pubmed_agent=pubmed_agent)
     deliberation = council.deliberate(
         symptoms=symptoms,
         patient_history=patient_history,
         imaging_findings=imaging_findings,
-        vitals=vitals
+        vitals=vitals,
+        raw_note=raw_note,
     )
     
     return deliberation.to_dict()
@@ -1153,6 +1155,7 @@ async def council_iterative_deliberate(request: Request):
     imaging_findings = data.get("imaging_findings", "")
     num_rollouts = min(int(data.get("num_rollouts", 5)), 10)
     vitals = data.get("vitals")
+    raw_note = data.get("raw_note", "")
 
     if not symptoms:
         from fastapi.responses import JSONResponse
@@ -1164,6 +1167,7 @@ async def council_iterative_deliberate(request: Request):
         patient_history=patient_history,
         imaging_findings=imaging_findings,
         vitals=vitals,
+        raw_note=raw_note,
     )
     return result.to_dict()
 

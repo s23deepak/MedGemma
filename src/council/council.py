@@ -477,7 +477,8 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
         symptoms: list[str],
         patient_history: str = "",
         imaging_findings: str = "",
-        vitals: dict | None = None
+        vitals: dict | None = None,
+        raw_note: str = "",
     ) -> CouncilDeliberation:
         """
         Conduct a full diagnostic council deliberation.
@@ -487,6 +488,9 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
             patient_history: Relevant patient history
             imaging_findings: Imaging results if available
             vitals: Current vital signs
+            raw_note: Full unstructured clinical note (H&P, progress note, etc.).
+                      When provided, the most symptom-relevant excerpts are retrieved
+                      via RAG and injected into each opinion prompt.
 
         Returns:
             CouncilDeliberation with consensus and all opinions
@@ -510,6 +514,8 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
             "case_info": case_info,
             "num_rollouts": self.num_rollouts,
             "mode": "standard",
+            "raw_note": raw_note,
+            "retrieved_context": "",
             "opinions": [],
             "consensus_diagnosis": None,
             "consensus_strength": "weak",
@@ -535,6 +541,7 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
         patient_history: str = "",
         imaging_findings: str = "",
         vitals: dict | None = None,
+        raw_note: str = "",
     ) -> "IterativeDeliberation":
         """
         2-round iterative deliberation with PubMed evidence feedback.
@@ -562,6 +569,8 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
             "case_info": case_info,
             "num_rollouts": self.num_rollouts,
             "mode": "iterative",
+            "raw_note": raw_note,
+            "retrieved_context": "",
             "opinions": [],
             "consensus_diagnosis": None,
             "consensus_strength": "weak",

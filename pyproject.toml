@@ -37,5 +37,11 @@ vllm = [
 memory = [
     "mem0ai>=1.0.4",
 ]
+# Semantic embedding for RAG context compression in Diagnostic Council
+# uv pip install "medgemma-assistant[rag]"  or  uv add sentence-transformers
+# Falls back to TF-IDF (numpy) if not installed.
+rag = [
+    "sentence-transformers>=2.2.0",
+]
 
 

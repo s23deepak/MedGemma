@@ -2,12 +2,21 @@
 LangGraph workflow for DiagnosticCouncil parallel opinion generation.
 
 Graph topology:
-  START → initialize
+  START → initialize → retrieve_context (RAG note compression)
         → [Send×N] generate_r1_opinion  (parallel fan-out via Send API)
         → calculate_consensus
-        → run_pubmed
+        → run_pubmed (PubMed Zebra Hunt)
         ├─ [iterative + rare_diagnoses] → [Send×N] generate_r2_opinion → calculate_r2_consensus → END
         └─ [standard or no rare dx]                                                              → END
+
+Key design choices:
+- opinions / r2_opinions use Annotated[list, operator.add] so LangGraph can merge
+  the outputs of concurrent Send branches without losing any responses.
+- Two node names (generate_r1_opinion, generate_r2_opinion) share the same function
+  body but have different outgoing edges — R1 routes to calculate_consensus, R2 to
+  calculate_r2_consensus.  This avoids duplicating code while keeping routing clean.
+- retrieve_context is a no-op when raw_note is empty, so standard usage (no note
+  supplied) is unchanged and incurs zero overhead.
 """
 from __future__ import annotations
 
@@ -28,6 +37,7 @@ from .council import (
     _get_diagnoses,
     _synth_discussion,
 )
+from .rag import compress_note
 
 
 # ── State schema ──────────────────────────────────────────────────────────────
@@ -38,7 +48,13 @@ class CouncilState(TypedDict):
     num_rollouts: int
     mode: Literal["standard", "iterative"]
 
+    # ── RAG context compression ───────────────────────────────────────────────
+    raw_note: str            # full unstructured clinical note (optional, "" if absent)
+    retrieved_context: str   # top-k retrieved chunks assembled by retrieve_context node
+
     # ── Round-1 fan-out accumulator ───────────────────────────────────────────
+    # Annotated[list[dict], operator.add] tells LangGraph to merge (not overwrite)
+    # when multiple Send branches return {"opinions": [x]} concurrently.
     opinions: Annotated[list[dict], operator.add]
 
     # ── Round-1 results ───────────────────────────────────────────────────────
@@ -52,6 +68,7 @@ class CouncilState(TypedDict):
     rare_diagnoses: list[str]
 
     # ── Round-2 fan-out accumulator ───────────────────────────────────────────
+    # Same merge semantics as opinions — receives outputs from parallel R2 Send branches.
     r2_opinions: Annotated[list[dict], operator.add]
 
     # ── Round-2 results ───────────────────────────────────────────────────────
@@ -71,6 +88,8 @@ def build_council_graph(agent=None, pubmed_agent=None):
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
+    # NOTE: _make_opinion_dict is not called by any node; the full opinion-generation
+    # logic lives inline in _opinion_node.  Left here for reference only.
     def _make_opinion_dict(
         opinion_id: str,
         symptoms: list[str],
@@ -128,10 +147,26 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
         """Ensure accumulators start empty (LangGraph merges via operator.add)."""
         return {"opinions": [], "r2_opinions": []}
 
+    def retrieve_context(state: CouncilState) -> dict:
+        """
+        Compress a full clinical note to the most symptom-relevant excerpts via RAG.
+        No-op if raw_note is absent or empty.
+        """
+        raw_note = state.get("raw_note", "")
+        if not raw_note or not raw_note.strip():
+            return {"retrieved_context": ""}
+        symptoms: list[str] = state["case_info"].get("symptoms", [])
+        context = compress_note(raw_note, symptoms, top_k=5)
+        return {"retrieved_context": context}
+
     def _opinion_node(state: CouncilState) -> dict:
         """
         Shared opinion-generation logic for both rounds.
-        Uses _round and _opinion_idx from state to distinguish.
+        _opinion_idx and _round are ephemeral keys injected by Send() — they are
+        not in CouncilState's schema but LangGraph passes through extra keys.
+        Uses _round to determine which accumulator key to write to
+        ("opinions" for R1, "r2_opinions" for R2) and whether to inject
+        rare diagnoses into the prompt.
         """
         idx: int = state["_opinion_idx"]           # type: ignore[typeddict-item]
         round_num: int = state.get("_round", 1)     # type: ignore[typeddict-item]
@@ -165,14 +200,22 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
                 "urgency": primary.get("urgency", "routine"),
             }
         else:
+            retrieved = state.get("retrieved_context", "")
             prompt = (
                 f"You are a medical diagnostic AI participating in a diagnostic council.\n"
                 f"Analyze the following patient case and provide your assessment:\n"
                 f"Symptoms: {', '.join(symptoms)}\n"
                 f"History: {history}\n"
                 f"Imaging: {imaging}\n"
-                f"Vitals: {vitals}\n\n"
-                f"Provide exactly 1 primary diagnosis and up to 3 differential diagnoses.\n"
+                f"Vitals: {vitals}\n"
+            )
+            if retrieved:
+                prompt += (
+                    f"\nRelevant excerpts from the patient's clinical notes:\n"
+                    f"{retrieved}\n"
+                )
+            prompt += (
+                f"\nProvide exactly 1 primary diagnosis and up to 3 differential diagnoses.\n"
                 f"Return EXACTLY ONE valid JSON object matching this exact schema and NOTHING ELSE:\n"
                 f'{{\n'
                 f'  "name": "Diagnosis Name",\n'
@@ -340,6 +383,7 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
     g = StateGraph(CouncilState)
 
     g.add_node("initialize", initialize)
+    g.add_node("retrieve_context", retrieve_context)
     # Two distinct node names sharing the same function — needed so edges can
     # route R1 output to calculate_consensus and R2 output to calculate_r2_consensus.
     g.add_node("generate_r1_opinion", _opinion_node)
@@ -348,6 +392,10 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
     g.add_node("run_pubmed", run_pubmed)
     g.add_node("calculate_r2_consensus", calculate_r2_consensus)
 
+    # fan_out_r1 is a conditional-edge function, not a node.
+    # It fires after retrieve_context completes (sequential), then spawns
+    # num_rollouts parallel Send jobs.  Each job receives a full copy of
+    # state plus the ephemeral _opinion_idx and _round keys.
     def fan_out_r1(state: CouncilState) -> list[Send]:
         return [
             Send("generate_r1_opinion", {**state, "_opinion_idx": i, "_round": 1})
@@ -355,7 +403,8 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
         ]
 
     g.add_edge(START, "initialize")
-    g.add_conditional_edges("initialize", fan_out_r1)
+    g.add_edge("initialize", "retrieve_context")
+    g.add_conditional_edges("retrieve_context", fan_out_r1)
     g.add_edge("generate_r1_opinion", "calculate_consensus")
     g.add_edge("calculate_consensus", "run_pubmed")
     g.add_conditional_edges("run_pubmed", route_after_pubmed)

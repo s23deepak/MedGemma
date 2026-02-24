@@ -371,6 +371,10 @@
                     <label>Imaging Findings (if available)</label>
                     <textarea id="imaging" placeholder="e.g., CXR shows bilateral infiltrates..."></textarea>
                 </div>
+                <details class="input-group" style="margin-top:8px;">
+                    <summary style="cursor:pointer;font-weight:600;color:#4f8ef7;">Paste Clinical Note (optional — RAG context extraction)</summary>
+                    <textarea id="rawNote" rows="6" style="margin-top:8px;width:100%;" placeholder="Paste the full H&P, progress note, or other clinical note here. The council will automatically retrieve the most symptom-relevant excerpts and inject them into each AI opinion prompt."></textarea>
+                </details>
                 <div class="input-grid">
                     <div class="input-group">
                         <label>Number of AI Opinions</label>
@@ -447,6 +451,7 @@
                 const imaging = document.getElementById('imaging').value;
                 const numRollouts = parseInt(document.getElementById('numRollouts').value);
                 const vitals = document.getElementById('vitals').value;
+                const rawNote = (document.getElementById('rawNote') || {}).value || '';
 
                 if (symptoms.length === 0) {
                     alert('Please enter at least one symptom');
@@ -462,7 +467,7 @@
                     const response = await fetch('/api/council/deliberate', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ symptoms, patient_history: history, imaging_findings: imaging, num_rollouts: numRollouts, vitals })
+                        body: JSON.stringify({ symptoms, patient_history: history, imaging_findings: imaging, num_rollouts: numRollouts, vitals, raw_note: rawNote })
                     });
                     const data = await response.json();
                     renderDeliberation(data);
@@ -638,6 +643,7 @@
                     imaging_findings: document.getElementById('imaging').value,
                     num_rollouts: parseInt(document.getElementById('numRollouts').value),
                     vitals: document.getElementById('vitals').value,
+                    raw_note: (document.getElementById('rawNote') || {}).value || '',
                 };
             }
 

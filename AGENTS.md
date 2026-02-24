@@ -63,7 +63,7 @@ Multi-rollout AI deliberation for consensus diagnosis via a LangGraph `StateGrap
 
 #### Graph Topology (`src/council/graph.py`)
 ```
-START → initialize
+START → initialize → retrieve_context (RAG)
       → [Send×N] generate_r1_opinion  (parallel fan-out)
             → calculate_consensus
                   → run_pubmed
@@ -79,7 +79,9 @@ START → initialize
 - **API routes**: `POST /api/council/deliberate` (standard), `POST /api/council/iterative-deliberate` (Deep Dive)
 
 #### Context Engineering
-Each opinion prompt is stateless and compact (~300–400 tokens): only structured case fields + a JSON schema + urgency constraint. No cross-opinion conversation history is shared — each of the N rollouts sees only the raw case info, preventing anchoring bias. In Round 2, only rare diagnosis *names* (3–5 bullet points) are appended, not full PubMed abstracts. Token counting, truncation, and RAG are not currently needed because input fields (`symptoms`, `history`, `imaging`, `vitals`) are short strings; if expanded to full clinical notes, summarization/chunking would become necessary.
+Each opinion prompt is stateless and compact (~300–400 tokens): only structured case fields + a JSON schema + urgency constraint. No cross-opinion conversation history is shared — each of the N rollouts sees only the raw case info, preventing anchoring bias. In Round 2, only rare diagnosis *names* (3–5 bullet points) are appended, not full PubMed abstracts.
+
+**RAG context compression (`raw_note` parameter):** When a full clinical note (H&P, progress note, etc.) is supplied via `raw_note`, a `retrieve_context` graph node runs before the fan-out. It calls `src/council/rag.py:compress_note()` to chunk the note into overlapping ~250-word windows and retrieve the top-5 most symptom-relevant excerpts via cosine similarity. Only those excerpts are injected into each opinion prompt, keeping token budgets controlled regardless of note length. The embedder uses `sentence-transformers/all-MiniLM-L6-v2` when installed (`uv pip install "medgemma-assistant[rag]"`), and falls back automatically to L2-normalised TF-IDF (numpy-only) otherwise. When `raw_note` is empty, the node is a no-op and existing behaviour is unchanged.
 
 ### local_health_trends (automatic context pipeline)
 The system automatically enriches encounters with location-aware trend context.

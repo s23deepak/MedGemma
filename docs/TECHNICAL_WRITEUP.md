@@ -2,358 +2,380 @@
 
 ## Executive Summary
 
-The **MedGemma Clinical Assistant** is an AI-powered clinical decision support system that integrates MedGemma for multimodal reasoning, speech recognition for physician dictation, and a FHIR-compatible EHR. It features imaging artifact detection, clinical correlation analysis, location-aware public-health/environment trend correlation, a multi-opinion Diagnostic Council backed by live PubMed literature, SOAP compliance monitoring, a patient-facing portal with safety guardrails, an AI Chat Portal with image annotation, and persistent patient memory powered by Mem0.
+The **MedGemma Clinical Assistant** is an AI-powered clinical decision support system built on Google's MedGemma 1.5 4B IT model. It targets two compounding problems in healthcare: **physician documentation burden** (2+ hours/day) and **diagnostic error** (affecting ~12 million Americans annually).
+
+The system provides:
+- Real-time multimodal encounter support — speech transcription, medical image analysis, and EHR context combined into automated SOAP documentation
+- A **Diagnostic Council** — a LangGraph-orchestrated multi-rollout deliberation system where N independent AI opinions are generated in parallel and synthesized into a consensus diagnosis, backed by live PubMed case literature
+- An **Iterative Evidence Feedback Loop** — a two-round deliberation that challenges its own initial hypothesis by injecting PubMed-sourced rare diagnoses into a second round of AI opinions
+- **RAG context compression** for full clinical notes — semantic retrieval of the most symptom-relevant excerpts before injecting into council prompts
+- An end-to-end **inpatient workflow** covering progress notes, SBAR shift handoffs, safety watchlist alerts, and discharge planning with readmission risk scoring
+- A **Patient Portal** and **AI Chat Portal** with safety guardrails, image annotation, and persistent cross-encounter memory via Mem0
 
 ---
 
-## Architecture Overview
+## 1. The Clinical Problem
+
+Physicians spend over 2 hours per day on documentation — time taken away from patients. Meanwhile, diagnostic errors affect roughly 12 million Americans annually. Many of these errors are not from lack of knowledge, but from cognitive overload: a physician seeing 20+ patients per shift cannot exhaustively search rare-disease literature for every atypical presentation.
+
+This system addresses both problems simultaneously:
+- **Documentation burden**: Transcription + imaging + EHR context → SOAP note generated automatically, requiring only physician approval
+- **Diagnostic error**: Multi-opinion consensus + live PubMed literature → rare diagnoses surfaced that might otherwise be missed; inpatient safety rules catch VTE prophylaxis gaps, Foley dwell risks, and overdue documentation
+
+---
+
+## 2. Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Frontend (HTML/JS/CSS)                            │
-│  • Real-time transcription   • Medical image upload                 │
-│  • SOAP note preview         • Patient history timeline             │
-│  • Compliance dashboard      • Diagnostic council panel             │
-│  • Patient portal            • AI Chat Portal (annotate + voice)   │
-│  • Role-based navigation     • PubMed literature panels            │
-└───────────────────────┬─────────────────────────────────────────────┘
-                        │ WebSocket / REST
-┌───────────────────────▼─────────────────────────────────────────────┐
-│                    FastAPI Backend (main.py)                         │
-│  • /api/encounters/*    - Clinical encounter management             │
-│  • /api/patients/*      - FHIR EHR access                           │
-│  • /api/compliance/*    - SOAP compliance checks                    │
-│  • /api/council/*       - Diagnostic council deliberation           │
-│  • /api/portal/*        - Patient-facing Q&A                        │
-│  • /api/history/*       - Patient timeline & records                │
-│  • /api/memory/*        - Persistent patient memory (Mem0)          │
-│  • /api/pubmed/*        - PubMed search, zebra-hunt, EBM, DDI      │
-│  • /api/ai-portal/*     - Physician multimodal chat                 │
-│  • local trend pipeline  - Location-aware symptom context enrichment  │
-│  • /api/health          - System health check                       │
-│  • /ws/audio/*          - Audio streaming                           │
-└───────────────────────┬─────────────────────────────────────────────┘
-                        │
-  ┌──────────┬──────────┼──────────┬───────────┬────────────┐
-  ▼          ▼          ▼          ▼           ▼            ▼
-┌──────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────┐
-│Med   │ │Med     │ │Mock    │ │Clinical│ │Clinical│ │Diagnostic│
-│Gemma │ │ASR     │ │FHIR    │ │Intel   │ │Correlat│ │Council   │
-│Agent │ │Stream  │ │Server  │ │        │ │ion     │ │          │
-├──────┤ ├────────┤ ├────────┤ ├────────┤ ├────────┤ ├──────────┤
-│Image │ │Real-   │ │Patient │ │ICD-10  │ │Artifact│ │5 Indep.  │
-│Anlys │ │time    │ │records │ │Drug Ix │ │Detect  │ │Opinions  │
-│SOAP  │ │audio   │ │CRUD    │ │Crit    │ │Finding │ │Consensus │
-│Gen   │ │Whisper │ │        │ │Alerts  │ │Classif │ │+ PubMed  │
-└──────┘ └────────┘ └────────┘ └────────┘ └────────┘ └──────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Frontend (HTML/JS)                               │
+│  Transcription · Image upload · SOAP preview · Diagnostic Council       │
+│  Patient Portal  · AI Chat Portal (annotate + voice) · Inpatient       │
+│  PubMed literature panels  · Rounding / SBAR / Safety / Discharge      │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               │ WebSocket / REST
+┌──────────────────────────────▼──────────────────────────────────────────┐
+│                       FastAPI Backend (main.py)                          │
+│   /api/encounters/*  /api/council/*  /api/pubmed/*  /api/inpatient/*    │
+│   /api/portal/*  /api/memory/*  /api/ai-portal/*  /ws/audio/*          │
+└──┬───────┬───────┬───────┬────────┬────────┬────────┬──────────────────┘
+   │       │       │       │        │        │        │
+   ▼       ▼       ▼       ▼        ▼        ▼        ▼
+MedGemma  MedASR  FHIR  PubMed  Diagnostic  Local  Inpatient
+ Agent   Stream  server  Synth   Council    Trends  Services
+ (4-bit)         (Fire-  Agent  (LangGraph) (RSS)  (rounding
+                 store /        RAG+Iter.           SBAR/safe
+                 Mock)          Evidence           /discharge)
+```
 
-  ┌──────────┬──────────┬──────────┬────────────┬──────────┐
-  ▼          ▼          ▼          ▼            ▼          ▼
-┌──────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────┐ ┌──────┐
-│SOAP  │ │Patient │ │Patient │ │Patient │ │PubMed    │ │AI    │
-│Compl │ │Portal  │ │History │ │Memory  │ │Synthesis │ │Chat  │
-│iance │ │        │ │        │ │(Mem0)  │ │Agent     │ │Portal│
-├──────┤ ├────────┤ ├────────┤ ├────────┤ ├──────────┤ ├──────┤
-│Sympt │ │Emerg   │ │Time-   │ │Cross-  │ │Case      │ │Anno- │
-│Flags │ │Detect  │ │line    │ │Encntr  │ │Matcher   │ │tate  │
-│Rates │ │Guard-  │ │Meds &  │ │Recall  │ │EBM Valid │ │Voice │
-│      │ │rails   │ │Imaging │ │Extract │ │DDI Mon.  │ │Image │
-└──────┘ └────────┘ └────────┘ └────────┘ └──────────┘ └──────┘
+**Data flow for a typical encounter:**
+
+```
+Doctor speaks
+   → MedASR streaming transcription (WebSocket)
+   → Session accumulates transcript + image findings
+   → POST /api/encounters/{id}/generate-soap
+       ├── Local trend correlation (patient location × symptoms)
+       ├── MedGemma processes encounter (image + transcript + EHR)
+       ├── SOAP note generated with ICD-10 codes & critical alerts
+       ├── Background: PubMed synthesis in 3 modes
+       │     ├── case_matcher   → rare_diagnoses
+       │     ├── ebm_validator  → plan divergences
+       │     └── ddi_monitor    → drug interaction alerts
+       └── Returns SOAP + local_trend_insights to UI
+   → Doctor reviews, approves → EHR updated
 ```
 
 ---
 
-## Key Components
+## 3. MedGemma Integration (`src/agent/`)
 
-### 1. MedGemma Agent (`src/agent/`)
+MedGemma 1.5 4B IT is the backbone of the system, used in four distinct ways:
 
-| Component | Description |
-|-----------|-------------|
-| `healthcare_agent.py` | Main agent with dual-model routing, tool execution, Mem0 integration |
-| `medgemma_agent.py` | HuggingFace Transformers with 4-bit quantization |
-| `vllm_agent.py` | vLLM backend for 2-3x faster inference |
-| `function_gemma.py` | Lightweight 270M tool router |
-| `tools.py` | 10 function-calling tool definitions (includes `search_pubmed`) |
-| `clinical_correlation.py` | Imaging artifact detection & finding classification |
-| `src/trends/local_health_trends.py` | Location-aware trend fetch + symptom correlation |
-| `src/trends/external_vocab.py` | NLM MeSH enrichment + cache backend (Firestore/local) |
+| Usage | Where | Description |
+|-------|-------|-------------|
+| Medical image analysis | Encounter UI | Analyzes X-ray/CT/MRI with clinical context; flags critical findings |
+| SOAP note generation | Encounter workflow | Processes transcript + image findings + EHR context → structured S/O/A/P |
+| Diagnostic Council prompts | `/api/council/*` | Each rollout calls MedGemma with a compact case prompt; returns JSON diagnosis |
+| Patient Portal & AI Chat | `/api/portal/*`, `/api/ai-portal/*` | Multi-turn Q&A with guardrails, voice, and image annotation support |
 
-**Memory Optimization:**
-- 4-bit NF4 quantization via BitsAndBytes
-- Fits in 8GB VRAM (RTX 5060 compatible)
+**Memory optimization:**
+- 4-bit NF4 quantization via BitsAndBytes — fits in 8 GB VRAM (RTX 5060 compatible)
+- vLLM backend available (`--use-vllm`) for 2–3x faster inference
+- Simulated mode (`SIMULATED_MODE=true`) for zero-GPU demos
 
-### 2. Clinical Intelligence (`src/clinical/`)
+---
 
-| Feature | Implementation |
-|---------|----------------|
-| ICD-10 Codes | 30+ diagnosis mappings |
-| Confidence Scores | 0-100% with evidence |
-| Critical Alerts | PE, Mass, Sepsis, Pneumothorax detection |
-| Drug Interactions | 20+ interaction pairs with severity levels |
-| Differential Ranking | Top 5 ranked by confidence |
-| Evidence Citations | Source → SOAP linking |
+## 4. Diagnostic Council — LangGraph Multi-Rollout Deliberation (`src/council/`)
 
-### 3. Clinical Correlation (`src/agent/clinical_correlation.py`)
+The Diagnostic Council is the most architecturally novel component. It replaces sequential single-model inference with **N independent parallel opinions** orchestrated by a LangGraph `StateGraph`.
 
-| Feature | Implementation |
-|---------|----------------|
-| Artifact Detection | Motion, metal, positioning, exposure, aliasing, truncation |
-| Image Quality | Diagnostic / Acceptable / Degraded / Non-Diagnostic |
-| Finding Classification | Critical / Significant / Incidental / Artifact |
-| Prevalence Database | 20+ entries from peer-reviewed radiology literature |
-| Symptom-Region Mapping | 7 body regions with expected symptoms |
-| Incidental Reporting | Prevalence notes for asymptomatic populations |
+### 4.1 Why Multi-Rollout?
 
-### 4. SOAP Note Generation (`src/soap/`)
+A single LLM call is subject to anchoring bias — it converges on a probable diagnosis before considering rarer alternatives. By running N stateless, independent prompts (each seeing only the raw case info, not prior opinions), we get genuine diversity. Consensus is computed from the distribution of those N answers:
 
-- `SOAPNote` — Basic structured note
-- `EnhancedSOAPNote` — Full clinical intelligence integration
-- Parses MedGemma output into S/O/A/P sections
-- `extract_clinical_orders()` — extracts lab, imaging, medication, and referral orders from plan text
-- HTML, Markdown, and dict rendering
+- **Strong**: >80% agreement
+- **Moderate**: 60–80%
+- **Weak**: 40–60%
+- **Split**: <40%
 
-### 5. SOAP Compliance (`src/compliance/`)
+A weak or split result is itself clinically meaningful — it indicates the differential is genuinely ambiguous and warrants more investigation.
 
-- Symptom duration threshold monitoring
-- Documentation update frequency tracking
-- Per-patient compliance flags with severity levels
-- Aggregate compliance rate reporting
+### 4.2 Graph Topology
 
-### 6. Diagnostic Council (`src/council/`)
+```
+START → initialize → retrieve_context (RAG)
+      → [Send×N] generate_r1_opinion  (parallel fan-out)
+            → calculate_consensus
+                  → run_pubmed (Zebra Hunt)
+                        ├─ [iterative + rare_dx] → [Send×N] generate_r2_opinion
+                        │                                  → calculate_r2_consensus → END
+                        └─ [standard | no rare_dx] ──────────────────────────────→ END
+```
 
-- 3–7 independent diagnostic opinions per case (configurable)
-- Consensus strength scoring (Strong / Moderate / Weak / Split)
-- Accepts symptoms, patient history, and imaging findings
-- PubMed Zebra Hunt: `case_matcher` runs automatically after deliberation to surface rare diagnoses from literature
-- Deliberation history tracking
+**Key LangGraph patterns used:**
 
-### 7. PubMed Synthesis Agent (`src/pubmed/`)
+| Pattern | Where | Why |
+|---------|-------|-----|
+| `Annotated[list[dict], operator.add]` | `opinions`, `r2_opinions` fields | Merges parallel branch outputs into one list without race conditions |
+| `Send` API | `fan_out_r1`, `route_after_pubmed` | Dispatches N concurrent nodes; each carries its own `_opinion_idx` and `_round` |
+| Two-node routing | `generate_r1_opinion` → `calculate_consensus`; `generate_r2_opinion` → `calculate_r2_consensus` | Same underlying function, different downstream edges — avoids code duplication while enabling distinct routing |
+| Conditional edge returning `END` | `route_after_pubmed` | Standard mode or no rare diagnoses → short-circuit, skip Round 2 |
+| Closure capture | `build_council_graph(agent, pubmed_agent)` factory | Agent references captured at graph build time; graph lazily compiled and cached |
 
-| Component | Description |
-|-----------|-------------|
-| `pubmed_client.py` | NCBI E-utils API client with retry, rate-limiting (3 or 10 req/s) |
-| `synthesis_agent.py` | Three-mode synthesis agent |
+### 4.3 Iterative Evidence Feedback Loop (Deep Dive)
 
-**Three synthesis modes:**
+When mode is `"iterative"` and PubMed returns rare diagnosis candidates:
 
-| Mode | Query Type | Output Field |
-|------|-----------|--------------|
-| `case_matcher` | PubMed Case Reports matching unusual symptom clusters | `rare_diagnoses` |
-| `ebm_validator` | Systematic Reviews + RCTs validating treatment plans | `divergences` |
-| `ddi_monitor` | Pharmacology literature for novel drug-drug interactions | `ddi_alerts` |
+1. **Round 1**: Standard N-rollout deliberation → initial consensus (e.g., "Community-Acquired Pneumonia")
+2. **PubMed Zebra Hunt**: `case_matcher` searches PubMed Case Reports for the symptom cluster
+3. **Round 2**: A second fan-out runs with rare diagnoses injected into each opinion prompt (as bullet points, not full abstracts — ~50-token overhead). Each R2 opinion may now elevate a rare diagnosis if it fits the case better
+4. **Shift detection**: If R2 consensus differs from R1 consensus, `consensus_shifted=True` and a yellow ⚡ banner appears
 
-- Progressive query relaxation in `case_matcher`: removes atypical markers one by one, then falls back to broad rare/unusual filter
-- `ddi_monitor` caps at 12 drug pairs to respect NCBI rate limits
-- Background task after SOAP generation; polled via `GET /api/encounters/{id}/pubmed-insights`
-- Surfaces results inline in Encounter UI, Diagnostic Council panel, and AI Chat Portal
+This creates a self-challenging mechanism: the system questions its own initial assessment using real medical literature evidence.
 
-### 8. AI Chat Portal (`/ai-portal`)
+### 4.4 RAG Context Compression (`src/council/rag.py`)
 
-- Three-panel layout: Patient Context | Medical Imaging | Chat
-- Supports existing patient selection or manual text entry for context
-- Image drop zone with `<canvas>` annotation overlay — physicians draw bounding boxes to focus MedGemma on regions of interest
-- Voice input via MedASR in both context and chat panels
-- Inline PubMed context enrichment: intent detected per message (DDI / EBM / zebra keywords) → appropriate synthesis mode runs alongside the MedGemma response
-- Markdown rendering for assistant messages
+When full clinical notes are provided (`raw_note` parameter), the `retrieve_context` graph node compresses them before the fan-out:
 
-### 9. Patient Portal (`src/portal/`)
+```
+raw_note (full H&P or progress note)
+   → chunk_note()   — sentence-boundary split with 50-word overlap, ~250-word chunks
+   → embed()        — sentence-transformers (semantic) or TF-IDF numpy (fallback)
+   → retrieve()     — top-5 chunks by cosine similarity to symptom query
+   → compress_note() returns joined excerpts (preserved in narrative order)
+   → injected into each opinion prompt as "Relevant excerpts from clinical notes"
+```
 
-- Emergency keyword detection (chest pain, seizure, bleeding, etc.)
-- Medical guardrails (prevents dosage/medication modification advice)
+Design choices:
+- **No mandatory new dependencies**: TF-IDF fallback uses only numpy (already a dependency). `sentence-transformers` is an optional extra (`[rag]`)
+- **Narrative order**: Retrieved chunks are re-sorted by original position, not score, so the assembled context reads coherently
+- **No-op for short inputs**: When `raw_note` is empty, the node returns immediately — zero overhead for standard usage
+
+---
+
+## 5. PubMed Synthesis Agent (`src/pubmed/`)
+
+Three clinical synthesis modes, each tailored to a distinct workflow need:
+
+| Mode | Query target | Clinical use | Output field |
+|------|-------------|--------------|--------------|
+| `case_matcher` | PubMed Case Reports | Find rare diagnoses for atypical symptom clusters | `rare_diagnoses` |
+| `ebm_validator` | Systematic reviews, meta-analyses, RCTs (last N years) | Validate physician's treatment plan against current evidence | `divergences` |
+| `ddi_monitor` | Pharmacology literature | Surface novel drug-drug interactions not in standard databases | `ddi_alerts` |
+
+**Implementation details:**
+- Pure stdlib (`urllib`, `xml.etree`) — no external HTTP library required for PubMed access
+- Progressive query relaxation in `case_matcher`: removes atypical markers one by one; falls back to broad `(rare OR unusual OR atypical)` filter if needed
+- `ddi_monitor` caps at 12 drug pairs to respect NCBI rate limits (3 req/s default, 10 req/s with `NCBI_API_KEY`)
+- After SOAP generation, all three modes run as a FastAPI `BackgroundTask` — UI polls `GET /api/encounters/{id}/pubmed-insights` for completion
+
+**Integration points:**
+- Encounter UI: results appear in the right panel after SOAP generation
+- Diagnostic Council: `run_pubmed` node in the LangGraph graph fires automatically; results populate the PubMed Zebra Hunt panel
+- AI Chat Portal: intent detection per message dispatches the appropriate mode alongside the MedGemma response
+
+---
+
+## 6. Local Health Trend Correlation (`src/trends/`)
+
+The system correlates patient symptoms with same-day local public health and environmental events:
+
+1. Patient location extracted from FHIR EHR demographics
+2. Three Google News RSS feeds queried: public health/clinical advisories; disease outbreaks; environmental hazards (wildfire smoke, air quality, heat, water contamination)
+3. Results classified into four event categories, then matched against symptom clusters
+4. Matched signals surface in the SOAP response as `local_trend_insights`
+
+**Vocabulary enrichment:**
+- External NLM MeSH Lookup API enriches the symptom-to-category mapping
+- Results cached in Firestore (`system_cache/medical_vocab_mesh`) with 12-hour TTL and local fallback
+- Optional semantic vector expansion via `MEDICAL_VOCAB_VECTOR_BACKEND`
+
+**Guardrail**: Trend context is explicitly labelled non-diagnostic and always requires physician validation before acting on it.
+
+---
+
+## 7. Inpatient Workflow Suite (`src/inpatient/`)
+
+Four services covering the full inpatient lifecycle:
+
+### 7.1 Rounding Copilot (`/rounding`)
+
+Generates a 24-hour SOAP progress note per admitted patient with:
+- Current vitals, active medications, latest labs from EHR
+- MedGemma narrative synthesis when available; structured fallback otherwise
+- `todo_items` list: flagged gaps (pending labs, missing reassessment notes, etc.)
+- LOS hours computed from admission date
+
+### 7.2 SBAR Handoff Generator (`/handoff`)
+
+Structured Situation–Background–Assessment–Recommendation document with an 8-point completeness audit:
+- Code status documented?
+- Allergies mentioned?
+- High-risk medications flagged (insulin, anticoagulants, opioids, vasopressors)?
+- Active devices documented (Foley, central line, ventilator)?
+- Contingency plans present?
+
+Incomplete handoffs receive a score and a `missing_fields` list — physicians cannot sign incomplete documents.
+
+### 7.3 Safety Watchlist (`/safety-dashboard`)
+
+Rule-based alert engine, sorted critical-first:
+
+| Rule | Severity | Trigger |
+|------|----------|---------|
+| VTE prophylaxis | CRITICAL | Admitted >24 h, no order, no documented contraindication |
+| Foley catheter | WARNING | Dwell >3 days, no reassessment note in last 24 h |
+| High-risk medication | WARNING | Vancomycin/aminoglycosides/insulin/metformin/NSAIDs without renal function lab in last 48 h |
+| Progress note absent | WARNING | No physician note in >24 h |
+
+Each alert includes a `suggested_action` and `ai_explanation` field.
+
+### 7.4 Discharge Planner
+
+Patient-friendly 5th–6th grade discharge summary with:
+- Three-tier readmission risk scoring (HIGH/MEDIUM/LOW) with explicit reasoning
+- MISSING-field enforcement: required fields not found in the record are explicitly marked `MISSING`, preventing sign-off on incomplete documents
+- Medication counselling notes per drug
+- Red flag symptoms for return precautions
+
+---
+
+## 8. AI Chat Portal (`/ai-portal`)
+
+Three-panel layout designed for flexible clinical queries:
+
+- **Left panel**: Patient context (EHR summary or free-text paste)
+- **Center panel**: Medical image drop zone with `<canvas>` annotation overlay — physicians draw bounding boxes to focus MedGemma on regions of interest
+- **Right panel**: Multi-turn chat with voice input and Markdown rendering
+
+PubMed intent detection: each chat message is analysed for keywords indicating DDI, EBM, or rare-disease inquiry — the appropriate synthesis mode runs in parallel with the MedGemma response. Results appear as a collapsible Evidence Check pill.
+
+---
+
+## 9. Patient Portal (`/patient-portal`)
+
+- Emergency keyword detection (chest pain, seizure, bleeding, etc.) → immediate escalation prompt
+- Medical guardrails: refuses dosage/medication modification advice
 - Query categorization (medication, symptoms, appointment, general)
-- Query history per patient
-- Appointment summary generation
-
-### 10. Patient Memory (`src/memory/`)
-
-- Powered by Mem0 with OpenAI for fact extraction
-- 12 methods: `add_encounter()`, `recall()`, `get_allergies()`, `get_medications()`, etc.
-- Auto-recall past context during encounters
-- Category-based retrieval: diagnoses, allergies, medications, preferences
-- Graceful fallback when OPENAI_API_KEY is not set
-
-### 11. Local Trend Intelligence (`src/trends/`)
-
-- Location-anchored RSS retrieval with geo relevance filtering
-- Correlates local signals (outbreaks, smoke/air quality, heat, water events) with same-day symptoms
-- External medical vocabulary enrichment from NLM MeSH Lookup API
-- Shared cache support in Firestore (`system_cache/medical_vocab_mesh`) with local fallback
-- Optional semantic vector enrichment (`MEDICAL_VOCAB_VECTOR_BACKEND`)
-
-### 11. Authentication (`src/auth/`)
-
-| Role | Features |
-|------|----------|
-| Doctor | History, Compliance, Council, Encounters, Portal, AI Chat |
-| Nurse | History, Encounters, Portal |
-| Resident | History, Council, Encounters, AI Chat |
-| Admin | All features |
-| Patient | Patient Portal only |
-
-### 12. Mock FHIR EHR (`src/ehr/`)
-
-Two demo patients:
-- **P001**: Sarah Wilson (58F) — Hypertension, Asthma
-- **P002**: Carlos Martinez (70M) — Diabetes, COPD
-
-### 13. Patient History (`src/history/`)
-
-- Timeline view of patient encounters
-- Medication history tracking
-- Imaging history with results
+- Patient memory (Mem0): allergies, medications, diagnoses recall across encounters
 
 ---
 
-## Performance
+## 10. Key Technical Design Decisions
 
-| Backend | Load Time | Inference | VRAM |
+| Decision | Rationale |
+|----------|-----------|
+| LangGraph `Send` API for fan-out | Native parallel execution without managing asyncio tasks; `operator.add` reducer handles merge automatically |
+| Two-node naming trick (`generate_r1_opinion` / `generate_r2_opinion`) | Same function body, different downstream edges — avoids duplicating logic while enabling distinct routing per round |
+| Stateless opinion prompts | No cross-opinion history → genuine independence, prevents anchoring bias; each of N prompts sees only raw case data |
+| TF-IDF numpy fallback for RAG | Zero new mandatory dependencies; `sentence-transformers` optional for better quality; feature degrades gracefully, never breaks |
+| Narrative-order chunk return | Re-sort retrieved chunks by original position before injection — assembled context reads as a coherent clinical excerpt, not ranked fragments |
+| PubMed stdlib-only client | No HTTPX/requests dependency at the PubMed layer; rate limiting via global sleep state keeps NCBI compliance simple |
+| FastAPI `BackgroundTasks` for PubMed | Non-blocking response to physician; PubMed synthesis (up to 12 API calls) runs in parallel with SOAP display |
+| MISSING-field enforcement in discharge | Prevents sign-off on incomplete documents; parallels SBAR completeness scoring for handoffs |
+
+---
+
+## 11. Performance
+
+| Backend | First-load | Inference | VRAM |
 |---------|-----------|-----------|------|
-| Transformers (4-bit) | ~30s | ~5s/response | ~6GB |
-| vLLM | ~20s | ~2s/response | ~7GB |
+| Transformers 4-bit | ~30 s | ~5 s/response | ~6 GB |
+| vLLM | ~20 s | ~2 s/response | ~7 GB |
 | Simulated (no GPU) | instant | instant | 0 |
 
 ---
 
-## API Endpoints
+## 12. API Reference (Summary)
 
-### Encounter Management
-
+### Encounter Workflow
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/patients` | List all patients |
-| GET | `/api/patients/{id}` | Get patient summary |
-| POST | `/api/encounters/start` | Start clinical encounter |
-| POST | `/api/encounters/{id}/image` | Upload X-ray image |
-| POST | `/api/encounters/{id}/transcription` | Add transcription text |
-| POST | `/api/encounters/{id}/generate-soap` | Generate SOAP note (triggers PubMed background task) |
-| POST | `/api/encounters/{id}/approve` | Approve note to EHR |
-| GET | `/api/encounters/{id}/pubmed-insights` | Poll PubMed background task result |
+| GET | `/api/patients` | List patients |
+| POST | `/api/encounters/start` | Begin encounter |
+| POST | `/api/encounters/{id}/image` | Upload medical image |
+| POST | `/api/encounters/{id}/generate-soap` | Generate SOAP + trigger PubMed background |
+| GET | `/api/encounters/{id}/pubmed-insights` | Poll PubMed background result |
+| POST | `/api/encounters/{id}/approve` | Approve note → EHR update |
 
-### Clinical Features
-
+### Diagnostic Council
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/history/{id}/timeline` | Patient encounter timeline |
-| GET | `/api/history/{id}/medications` | Medication history |
-| GET | `/api/history/{id}/imaging` | Imaging history |
-| POST | `/api/compliance/check` | Run compliance check |
-| GET | `/api/compliance/report` | Get compliance report |
-| POST | `/api/council/deliberate` | Diagnostic council deliberation (includes PubMed Zebra Hunt) |
+| POST | `/api/council/deliberate` | Standard N-rollout deliberation |
+| POST | `/api/council/iterative-deliberate` | Deep Dive 2-round evidence feedback loop |
 | GET | `/api/council/history` | Past deliberations |
 
 ### PubMed
-
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/pubmed/search` | Generic mode dispatch (case_matcher / ebm_validator / ddi_monitor) |
-| POST | `/api/pubmed/zebra-hunt` | Case matcher with common + atypical symptom split |
-| POST | `/api/pubmed/validate-plan` | EBM validator for assessment + plan text |
-| GET | `/api/pubmed/ddi-monitor/{patient_id}` | DDI monitor using patient's FHIR medications |
+| POST | `/api/pubmed/zebra-hunt` | Case matcher for rare diagnoses |
+| POST | `/api/pubmed/validate-plan` | EBM validator for treatment plan |
+| GET | `/api/pubmed/ddi-monitor/{patient_id}` | DDI monitor using FHIR medications |
 
-### AI Chat Portal
-
+### Inpatient
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/ai-portal/chat` | Multimodal chat with optional image + patient context; returns PubMed enrichment |
-
-### Patient Portal
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/portal/{id}/summary` | Patient summary |
-| POST | `/api/portal/ask` | Ask a health question |
-| GET | `/api/portal/{id}/history` | Query history |
-
-### Patient Memory (Mem0)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/memory/{id}` | Get all memories |
-| POST | `/api/memory/{id}/search` | Search memories |
-| POST | `/api/memory/{id}/add` | Add clinical note |
-| DELETE | `/api/memory/{id}/{mem_id}` | Delete specific memory |
-
-### System
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Health check with component status |
-
-### Trend Context
-
-| Flow | Location | Description |
-|------|----------|-------------|
-| Encounter SOAP generation | `/api/encounters/{id}/generate-soap` response | Includes `local_trend_insights` field with matched signals and non-diagnostic recommendation |
+| GET | `/api/inpatient/ward` | List admitted patients |
+| POST | `/api/inpatient/{id}/rounding-note` | 24-hour progress note |
+| POST | `/api/inpatient/{id}/sbar` | SBAR handoff with completeness audit |
+| GET | `/api/inpatient/safety` | Ward safety dashboard |
+| POST | `/api/inpatient/{id}/discharge-summary` | Discharge summary with readmission risk |
 
 ---
 
-## Testing
-
-72 tests across 10 test files covering all 12 modules:
-
-| Test File | Tests | Module |
-|-----------|-------|--------|
-| `test_fhir_ehr.py` | 5 | EHR |
-| `test_clinical_intelligence.py` | 8 | Clinical Intel |
-| `test_clinical_correlation.py` | 8 | Clinical Correlation |
-| `test_soap_generator.py` | 6 | SOAP |
-| `test_compliance.py` | 5 | Compliance |
-| `test_council.py` | 5 | Diagnostic Council |
-| `test_patient_portal.py` | 7 | Patient Portal |
-| `test_auth.py` | 6 | Auth |
-| `test_healthcare_agent.py` | 11 | Agent Integration |
-| `test_api.py` | 11 | API E2E |
+## 13. Running the Demo
 
 ```bash
-uv run pytest tests/ -v --tb=short   # ~4 seconds, no GPU needed
-```
+# No GPU required
+SIMULATED_MODE=true uv run python main.py
 
----
-
-## Running the Demo
-
-```bash
-# Install and run
-cd /home/deepu/MedGemma
-uv sync
+# Full mode (MedGemma + MedASR)
 uv run python main.py
 
-# With vLLM (faster)
+# With vLLM backend (2-3x faster)
 uv run python main.py --use-vllm
 
-# Simulated mode (no GPU)
-SIMULATED_MODE=true uv run python main.py
+# Semantic RAG (optional, improves clinical note compression)
+uv pip install "medgemma-assistant[rag]"
 
 # Run tests
 uv run pytest tests/ -v --tb=short
 ```
 
-Open http://localhost:8000 in browser.
+Open http://localhost:8000
 
 ---
 
-## Future Work
+## 14. Competition Compliance
 
-1. **Production MedASR** — Replace simulated speech recognition
-2. **Real FHIR Integration** — Connect to Epic/Cerner
-3. **HL7 CDA Export** — Standards-compliant documentation
-4. **Multi-GPU Scaling** — vLLM tensor parallelism
-5. **RAG-Enhanced Memory** — Clinical guideline retrieval
-6. **Audit Logging** — Full compliance trail
-7. **PubMed Semantic Search** — Replace keyword-based intent detection with embeddings
-8. **Managed Vector Backend** — Optional Qdrant/Pinecone backend for cross-term semantic retrieval
+| Requirement | Status |
+|-------------|--------|
+| Uses MedGemma 1.5 4B IT | ✅ |
+| Multimodal (image + text) | ✅ |
+| Clinical decision support use case | ✅ |
+| Structured output (SOAP notes) | ✅ |
+| EHR integration (FHIR + Firestore) | ✅ |
+| Safety guardrails | ✅ Emergency detection, medical guardrails, CRITICAL alerts |
+| Evidence-based clinical correlation | ✅ Live PubMed (3 synthesis modes) |
+| Multi-opinion consensus | ✅ LangGraph Diagnostic Council (N parallel rollouts) |
+| Persistent patient memory | ✅ Mem0 cross-encounter memory |
+| Location-aware context | ✅ Local health/environment trend correlation |
+| Inpatient care coverage | ✅ Rounding, SBAR, safety watchlist, discharge planner |
+| Context compression / RAG | ✅ Semantic retrieval for full clinical notes |
+| Iterative evidence feedback | ✅ 2-round Deep Dive with PubMed rare diagnosis injection |
+| Human-in-the-loop approval | ✅ All EHR updates require explicit physician approval |
+| Reproducibility | ✅ Simulated mode + test suite (72 tests, no GPU) |
 
 ---
 
-## Competition Compliance
+## 15. Future Work
 
-- ✅ Uses MedGemma 1.5 4B IT
-- ✅ Demonstrates multimodal (image + text)
-- ✅ Clinical decision support use case
-- ✅ Structured output (SOAP notes)
-- ✅ EHR integration pattern
-- ✅ Safety guardrails (emergency detection, medical guardrails)
-- ✅ Evidence-based clinical correlation
-- ✅ Multi-opinion consensus (Diagnostic Council)
-- ✅ Live PubMed literature grounding (3 synthesis modes)
-- ✅ Persistent patient memory (Mem0)
+1. **Production MedASR** — Replace simulated speech recognition with production-grade streaming model
+2. **Real FHIR Integration** — Connect to Epic/Cerner via standard SMART on FHIR flow
+3. **HL7 CDA Export** — Standards-compliant documentation for interoperability
+4. **Multi-GPU Scaling** — vLLM tensor parallelism for concurrent encounters
+5. **Managed Vector Backend** — Optional Qdrant/Pinecone backend replacing the current in-memory TF-IDF for cross-patient semantic retrieval
+6. **Audit Logging** — Immutable compliance trail (all AI suggestions + physician accept/reject decisions)
+7. **PubMed Semantic Search** — Replace keyword-based intent detection with embedding-based dispatch
+8. **Federated Learning** — Privacy-preserving fine-tuning on institution-specific clinical patterns
