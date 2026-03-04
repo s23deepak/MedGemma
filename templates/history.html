@@ -314,6 +314,18 @@
 
         <script>
             const tabs = document.querySelectorAll('.tab');
+
+            function mdHtml(t) {
+                if (!t) return '';
+                let h = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                h = h.replace(/^#{1,3} (.+)$/gm,'<strong>$1</strong>');
+                h = h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+                h = h.replace(/\*(.+?)\*/g,'<em>$1</em>');
+                h = h.replace(/^[\*\-] (.+)$/gm,'• $1');
+                h = h.replace(/\n/g,'<br>');
+                return h;
+            }
+
             tabs.forEach(tab => {
                 tab.addEventListener('click', () => {
                     tabs.forEach(t => t.classList.remove('active'));
@@ -402,8 +414,8 @@
                         items.forEach(item => {
                             html += `
                                 <div class="timeline-item" style="margin-bottom: 0px; box-shadow: none; border: 1px solid var(--border);">
-                                    <div class="timeline-title">${item.title}</div>
-                                    <div class="timeline-details">${item.details}</div>
+                                    <div class="timeline-title">${mdHtml(item.title)}</div>
+                                    <div class="timeline-details">${mdHtml(item.details)}</div>
                                 </div>
                             `;
                         });

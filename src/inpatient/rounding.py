@@ -153,8 +153,7 @@ class InpatientRoundingService:
             f"Be concise and clinically precise. Flag any critical concerns."
         )
         try:
-            result = agent.process_query(prompt)
-            note_text = result.get("response", "")
+            note_text = agent.chat(prompt)
             todo_items = self._extract_todos_from_note(note_text)
             return {
                 "patient_id": snap["patient"]["id"],

@@ -115,6 +115,10 @@ Rule-based inpatient safety watchlist checker.
   2. Foley catheter: dwell time >3 days without reassessment note in last 24h → WARNING
   3. High-risk medication (vancomycin, aminoglycosides, insulin, metformin, NSAIDs) without renal function lab in last 48h → WARNING
   4. No physician progress note in >24h → WARNING
+  5. Falls risk (Morse scale): age ≥65, ≥2 fall history, assistive device/IV line documented → CRITICAL if high Morse score
+  6. Pressure ulcer risk (Braden scale): limited mobility + nutritional deficit indicators → WARNING
+  7. Antibiotic de-escalation: broad-spectrum antibiotic (vancomycin, meropenem, piperacillin) active with culture results available → WARNING to review spectrum
+  8. Glycemic control: active insulin order without glucose monitoring observation in last 6h → WARNING
 - **Dashboard**: `get_ward_safety_dashboard(ward)` aggregates alerts for all inpatients, sorted critical-first
 
 ### generate_discharge_summary
@@ -127,6 +131,24 @@ Generate a patient-friendly discharge summary with readmission risk assessment.
   - HIGH: CHF, COPD, sepsis, CKD, prior admission in last 30 days, LOS >7 days
   - MEDIUM: Diabetes, AF, stroke, post-surgical, polypharmacy (≥5 meds)
   - LOW: No identified risk factors
+- **LACE Index**: Quantitative readmission risk score: L (LOS 0–7) + A (Acuity: 3 if ER admit) + C (Charlson comorbidity weighted score, capped 5) + E (ED visits in last 6 months, 0–4). Score ≥10 = HIGH, 5–9 = MEDIUM, <5 = LOW. Included in discharge summary response as `lace_score`, `lace_components`, `lace_interpretation`.
+
+### prior_auth_and_referral
+Auto-detect and manage prior authorization requests and specialist referral letters.
+- **Prior auth detection**: `POST /api/prior-auth/{patient_id}/detect` — scans order text for medications and procedures requiring prior auth (immunologics, biologics, specialty imaging)
+- **Approve/Deny**: `POST /api/prior-auth/request/{auth_id}/approve` and `.../deny`
+- **Referral letters**: `POST /api/referral/{patient_id}/generate` — AI-generated specialist letters from encounter context
+- **Routes**: `GET /api/prior-auth/{patient_id}`, `GET /api/prior-auth/request/{auth_id}`, `GET /api/referral/{patient_id}`
+
+### audit_and_metrics
+- **Audit trail**: Every clinical AI action (SOAP generation, council deliberation, rounding, SBAR, discharge) is logged as an `AuditEvent` with timestamp, event type, patient_id, and user_id. Queryable via `GET /api/audit/recent` and `GET /api/audit/patient/{id}`
+- **Performance metrics**: All major route handlers are instrumented with `@track_perf()`. Rolling 200-sample latency stats (avg/min/max/count) available at `GET /api/metrics`
+
+### hospital_registry
+Multi-tenant hospital configuration with per-hospital formulary restrictions and feature flags.
+- **Routes**: `GET /api/hospitals`, `GET /api/hospitals/{id}`, `POST /api/hospitals`, `GET /api/hospitals/{id}/patients`
+- **Demo hospitals**: GENERAL (Chicago) — all features enabled; COMMUNITY (New York) — prior_auth and simulation disabled, formulary restricts adalimumab and pembrolizumab
+- **Patient assignment**: P001–P004 → GENERAL; P005 (Dorothy Chen) → COMMUNITY
 
 ## Safety Constraints
 
@@ -142,3 +164,67 @@ This agent operates in a clinical setting where:
 - Medical images may be reviewed during the visit
 - The physician dictates observations and findings
 - Documentation is generated in real-time for review
+
+## Infrastructure & Deployment
+
+### Model Backend
+
+Three modes, controlled by environment variables:
+
+| Mode | Env var | Model loading |
+|------|---------|---------------|
+| **vLLM** (recommended) | `USE_VLLM=true` | `VLLMModelManager` — 3 models sleep/wake on one GPU |
+| **Transformers** (default) | *(unset)* | `MedGemmaAgent` — HuggingFace 4-bit quantization |
+| **Simulated** (no GPU) | `SIMULATED_MODE=true` | Mock responses, zero GPU usage |
+
+### vLLM Setup (medgemma-assistant project)
+
+```bash
+# Activate the uv project environment
+cd /home/deepu/MedGemma
+
+# Install vLLM extra (already installed in this project)
+uv pip install "medgemma-assistant[vllm]"
+
+# Start with vLLM backend
+USE_VLLM=true uv run python main.py
+
+# Optional: disable FunctionGemma or MedASR to save RAM
+# (configure via VLLMModelManager kwargs in load_models_lazy)
+```
+
+### VLLMModelManager (`src/agent/vllm_manager.py`)
+
+Manages **FunctionGemma (270M) + MedGemma (4B) + MedASR** with `vllm.sleep(level=2)`:
+- Level-2 sleep offloads weights **and** KV cache to CPU — GPU is fully free between calls
+- Only one model awake at a time; an `asyncio.Lock` serialises wake/sleep transitions
+- `chat(message)` — text-only inference, used by Diagnostic Council and SOAP generation
+- `generate_medgemma(prompt, image)` — multimodal inference (text + optional PIL image)
+- `generate_functiongemma(prompt)` — routing/function-call decisions (270M)
+- `transcribe_audio_file / transcribe_audio_bytes` — forwards to MedASR
+
+### Memory Config (RTX 5060 8 GB / single GPU)
+
+**Root cause of OOM:** vLLM profiles encoder memory by running dummy forward passes with `max_num_batched_tokens / tokens_per_image` images. At the default `max_num_batched_tokens=8192`, this is 32 images → ~3.4 GB activation memory during init — overflowing 8 GB combined with the 3.5 GB quantized model. Quantizing weights does NOT help (activations are always bfloat16). The actual fix is reducing the profiling batch size.
+
+Default constructor values tuned for 8 GB VRAM:
+
+| Parameter | Default | Reason |
+|-----------|---------|--------|
+| `quantization` | `"bitsandbytes"` | 4-bit reduces MedGemma 4B weight storage: 8 GB → 3.5 GB |
+| `dtype` | `"bfloat16"` | Stable numerics; activations always in bf16 regardless of quantization |
+| `enforce_eager` | `True` | Avoids ~0.5 GB CUDA graph overhead |
+| `max_model_len` | `4096` | Reduces KV-cache footprint |
+| `gpu_memory_utilization` | `0.85` | Leaves headroom for OS/CUDA context |
+| `max_num_batched_tokens` | `1024` | **Key fix.** Reduces encoder profiling from 32 images → 4 images → ~0.4 GB activation memory. Leaves 0.6 GB for KV cache (4,480 tokens). Vision fully enabled. |
+| `enable_vision` | `True` | Full multimodal inference. Set `False` only if 1024 still OOMs — uses `limit_mm_per_prompt={"image": 0}` to skip encoder profiling entirely. |
+
+Memory breakdown at default settings:
+```
+Weights (4-bit):        3.73 GB
+Encoder profiling:      ~0.40 GB  (4 images × 256 tokens)
+KV cache pages:         ~0.60 GB  (4,480 tokens)
+CUDA context + misc:    ~2.50 GB
+Total:                  ~7.23 GB  ← fits in 8 GB at gpu_memory_utilization=0.85
+```
+

@@ -360,15 +360,18 @@ def seed_inpatients(db):
     # --- Conditions ---
     conditions = {
         "P004": [
-            {"name": "Sepsis", "status": "active", "onset": admission_p004},
-            {"name": "Acute Kidney Injury", "status": "active", "onset": admission_p004},
-            {"name": "Hypertension", "status": "active", "onset": "2015-03-10"},
+            {"name": "Sepsis due to gram-negative bacteria", "status": "active", "onset": admission_p004},
+            {"name": "Acute respiratory failure", "status": "active", "onset": admission_p004},
+            {"name": "Type 2 diabetes mellitus", "status": "active", "onset": "2015-06-10"},
+            {"name": "Acute kidney injury stage 2", "status": "active",
+             "onset": (now - timedelta(hours=18)).isoformat()},
         ],
         "P005": [
-            {"name": "Congestive Heart Failure", "status": "active", "onset": "2020-06-01"},
-            {"name": "Atrial Fibrillation", "status": "active", "onset": "2021-09-15"},
-            {"name": "Chronic Kidney Disease Stage 3", "status": "active", "onset": "2022-11-20"},
-            {"name": "Hypertension", "status": "active", "onset": "2012-04-05"},
+            {"name": "Acute exacerbation of congestive heart failure", "status": "active",
+             "onset": admission_p005},
+            {"name": "Atrial fibrillation", "status": "active", "onset": "2019-11-05"},
+            {"name": "Chronic kidney disease stage 3", "status": "active", "onset": "2021-03-18"},
+            {"name": "Type 2 diabetes mellitus", "status": "active", "onset": "2008-07-22"},
         ],
     }
     for pid, conds in conditions.items():
@@ -381,16 +384,18 @@ def seed_inpatients(db):
     # --- Medications ---
     medications = {
         "P004": [
-            {"name": "Piperacillin-Tazobactam 3.375g IV", "dosage": "q6h", "status": "active"},
-            {"name": "Norepinephrine", "dosage": "0.1 mcg/kg/min IV", "status": "active"},
-            {"name": "Vancomycin 1250mg IV", "dosage": "q12h", "status": "active"},
+            {"name": "Piperacillin-Tazobactam 3.375g IV", "dosage": "Every 6 hours IV", "status": "active"},
+            {"name": "Norepinephrine infusion", "dosage": "0.08 mcg/kg/min IV (titrate for MAP >65)",
+             "status": "active"},
+            {"name": "Insulin Regular (sliding scale)", "dosage": "Sliding scale per ICU protocol",
+             "status": "active"},
         ],
         "P005": [
-            {"name": "Furosemide 40mg IV", "dosage": "BID", "status": "active"},
-            {"name": "Metoprolol Succinate 25mg", "dosage": "Once daily", "status": "active"},
-            {"name": "Lisinopril 5mg", "dosage": "Once daily", "status": "active"},
-            {"name": "Spironolactone 25mg", "dosage": "Once daily", "status": "active"},
-            {"name": "Apixaban 5mg", "dosage": "Twice daily", "status": "active"},
+            {"name": "Furosemide 80mg IV", "dosage": "Twice daily IV (transitioning to oral)", "status": "active"},
+            {"name": "Carvedilol 6.25mg", "dosage": "Twice daily oral", "status": "active"},
+            {"name": "Lisinopril 5mg", "dosage": "Once daily (held while Cr elevated)", "status": "active"},
+            {"name": "Apixaban 5mg", "dosage": "Twice daily (a-fib anticoagulation)", "status": "active"},
+            {"name": "Insulin Glargine 18 units", "dosage": "Once nightly subcutaneous", "status": "active"},
         ],
     }
     for pid, meds in medications.items():
@@ -403,10 +408,10 @@ def seed_inpatients(db):
     # --- Allergies ---
     allergies = {
         "P004": [
-            {"substance": "Penicillin", "reaction": "Rash", "severity": "moderate"},
+            {"substance": "Vancomycin", "reaction": "Red man syndrome", "severity": "moderate"},
         ],
         "P005": [
-            {"substance": "Aspirin", "reaction": "GI bleeding", "severity": "severe"},
+            {"substance": "Aspirin", "reaction": "Bronchospasm", "severity": "severe"},
         ],
     }
     for pid, allgs in allergies.items():
@@ -417,18 +422,76 @@ def seed_inpatients(db):
         print(f"  ✓ {pid}: {len(allgs)} allergies")
 
     # --- Observations ---
+    # P004: trending labs to support rich AI reasoning (WBC, Creatinine trend, Procalcitonin, cultures)
+    # P005: BNP + Weight trajectory over 4 days, rising Creatinine (diuresis-induced CKD stress)
     observations = {
         "P004": [
-            {"type": "Temperature", "value": "38.9 C", "date": admission_p004},
-            {"type": "Blood Pressure", "value": "88/52 mmHg", "date": admission_p004},
-            {"type": "Heart Rate", "value": "118 bpm", "date": admission_p004},
-            {"type": "Creatinine", "value": "2.1 mg/dL", "date": admission_p004},
+            {"type": "Blood Pressure", "value": "88/52 mmHg",
+             "date": (now - timedelta(hours=1)).isoformat()},
+            {"type": "Heart Rate", "value": "118 bpm",
+             "date": (now - timedelta(hours=1)).isoformat()},
+            {"type": "Temperature", "value": "38.9 °C",
+             "date": (now - timedelta(hours=2)).isoformat()},
+            {"type": "Oxygen Saturation", "value": "94 %",
+             "date": (now - timedelta(hours=1)).isoformat()},
+            {"type": "Lactate", "value": "3.2 mmol/L",
+             "date": (now - timedelta(hours=4)).isoformat()},
+            {"type": "Blood Glucose", "value": "218 mg/dL",
+             "date": (now - timedelta(hours=2)).isoformat()},
+            # Trending WBC — downtrending (treatment response)
+            {"type": "WBC", "value": "19.2 K/uL",
+             "date": (now - timedelta(hours=36)).isoformat()},
+            {"type": "WBC", "value": "16.8 K/uL",
+             "date": (now - timedelta(hours=8)).isoformat()},
+            # Trending Creatinine — uptrending AKI stage 2
+            {"type": "Creatinine", "value": "1.4 mg/dL",
+             "date": (now - timedelta(hours=36)).isoformat()},
+            {"type": "Creatinine", "value": "2.1 mg/dL",
+             "date": (now - timedelta(hours=18)).isoformat()},
+            {"type": "Creatinine", "value": "2.4 mg/dL",
+             "date": (now - timedelta(hours=8)).isoformat()},
+            {"type": "Procalcitonin", "value": "42.8 ng/mL",
+             "date": (now - timedelta(hours=36)).isoformat()},
+            {"type": "Blood Culture Result",
+             "value": "Gram-negative bacteremia — E. coli, susceptibilities pending",
+             "date": (now - timedelta(hours=14)).isoformat()},
+            {"type": "Urine Output", "value": "22 mL/hr",
+             "date": (now - timedelta(hours=2)).isoformat()},
+            {"type": "Mean Arterial Pressure", "value": "68 mmHg",
+             "date": (now - timedelta(hours=2)).isoformat()},
         ],
         "P005": [
-            {"type": "BNP", "value": "1840 pg/mL", "date": admission_p005},
-            {"type": "eGFR", "value": "38 mL/min/1.73m2", "date": admission_p005},
-            {"type": "Weight", "value": "84 kg (up 3 kg from baseline)", "date": admission_p005},
-            {"type": "Oxygen Saturation", "value": "94% on 2L nasal cannula", "date": admission_p005},
+            {"type": "Blood Pressure", "value": "118/72 mmHg",
+             "date": (now - timedelta(hours=3)).isoformat()},
+            {"type": "Heart Rate", "value": "76 bpm",
+             "date": (now - timedelta(hours=3)).isoformat()},
+            {"type": "Oxygen Saturation", "value": "96 %",
+             "date": (now - timedelta(hours=3)).isoformat()},
+            # Weight trajectory: -6.4 kg over 4 days (diuresis response)
+            {"type": "Weight", "value": "78.8 kg",
+             "date": (now - timedelta(days=4)).isoformat()},
+            {"type": "Weight", "value": "74.8 kg",
+             "date": (now - timedelta(days=2)).isoformat()},
+            {"type": "Weight", "value": "72.4 kg",
+             "date": (now - timedelta(hours=6)).isoformat()},
+            # BNP trajectory: 2100 → 1250 → 620 (improving)
+            {"type": "BNP", "value": "2100 pg/mL",
+             "date": (now - timedelta(days=4)).isoformat()},
+            {"type": "BNP", "value": "1250 pg/mL",
+             "date": (now - timedelta(days=2)).isoformat()},
+            {"type": "BNP", "value": "620 pg/mL",
+             "date": (now - timedelta(hours=8)).isoformat()},
+            # Creatinine trajectory: rising (diuresis-induced CKD stress)
+            {"type": "Creatinine", "value": "1.4 mg/dL",
+             "date": (now - timedelta(days=4)).isoformat()},
+            {"type": "Creatinine", "value": "1.5 mg/dL",
+             "date": (now - timedelta(days=3)).isoformat()},
+            {"type": "Creatinine", "value": "1.6 mg/dL",
+             "date": (now - timedelta(days=2)).isoformat()},
+            {"type": "Creatinine", "value": "1.7 mg/dL",
+             "date": (now - timedelta(hours=8)).isoformat()},
+            {"type": "eGFR", "value": "35 mL/min",
+             "date": (now - timedelta(hours=8)).isoformat()},
         ],
     }
     for pid, obs in observations.items():
@@ -439,8 +502,8 @@ def seed_inpatients(db):
         print(f"  ✓ {pid}: {len(obs)} observations")
 
     # --- Active Orders ---
-    # P004: Pip-Tazo, Vancomycin, Foley — intentionally NO VTE prophylaxis (triggers CRITICAL)
-    # P005: Furosemide, Telemetry, Foley inserted 4 days ago (triggers Foley dwell WARNING)
+    # P004: Full ICU orders + consults; intentionally NO VTE prophylaxis → CRITICAL safety alert
+    # P005: CHF management orders; Foley inserted at admission (96h dwell → Foley WARNING)
     active_orders = {
         "P004": [
             {
@@ -453,7 +516,7 @@ def seed_inpatients(db):
             {
                 "order_id": "ORD-P004-002",
                 "type": "medication",
-                "name": "Vancomycin 1250mg IV q12h",
+                "name": "Norepinephrine infusion",
                 "ordered_at": admission_p004,
                 "status": "active",
             },
@@ -465,36 +528,106 @@ def seed_inpatients(db):
                 "inserted_at": admission_p004,
                 "status": "active",
             },
+            {
+                "order_id": "ORD-P004-004",
+                "type": "monitoring",
+                "name": "Continuous cardiac monitoring",
+                "ordered_at": admission_p004,
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P004-005",
+                "type": "lab",
+                "name": "Basic metabolic panel Q8h",
+                "ordered_at": admission_p004,
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P004-006",
+                "type": "lab",
+                "name": "Blood culture susceptibility follow-up (stat)",
+                "ordered_at": (now - timedelta(hours=14)).isoformat(),
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P004-007",
+                "type": "consult",
+                "name": "Infectious Disease consult — gram-negative bacteremia, AKI",
+                "ordered_at": (now - timedelta(hours=12)).isoformat(),
+                "status": "pending",
+            },
+            {
+                "order_id": "ORD-P004-008",
+                "type": "imaging",
+                "name": "Renal ultrasound — new AKI stage 2 workup",
+                "ordered_at": (now - timedelta(hours=8)).isoformat(),
+                "status": "pending",
+            },
+            {
+                "order_id": "ORD-P004-009",
+                "type": "lab",
+                "name": "Repeat BMP in 4 hours",
+                "ordered_at": (now - timedelta(hours=2)).isoformat(),
+                "status": "active",
+            },
             # NOTE: No VTE prophylaxis order — intentional to trigger CRITICAL safety alert
         ],
         "P005": [
             {
                 "order_id": "ORD-P005-001",
                 "type": "medication",
-                "name": "Furosemide 40mg IV BID",
+                "name": "Furosemide 80mg IV BID",
                 "ordered_at": admission_p005,
                 "status": "active",
             },
             {
                 "order_id": "ORD-P005-002",
                 "type": "monitoring",
-                "name": "Continuous cardiac telemetry",
+                "name": "Daily weight",
                 "ordered_at": admission_p005,
                 "status": "active",
             },
             {
                 "order_id": "ORD-P005-003",
-                "type": "device",
-                "name": "Foley catheter",
+                "type": "monitoring",
+                "name": "Strict I&O",
                 "ordered_at": admission_p005,
-                "inserted_at": admission_p005,
                 "status": "active",
             },
             {
                 "order_id": "ORD-P005-004",
-                "type": "medication",
-                "name": "Enoxaparin 40mg SC daily (VTE prophylaxis)",
+                "type": "prophylaxis",
+                "name": "Enoxaparin 40mg SQ daily (VTE prophylaxis)",
                 "ordered_at": admission_p005,
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P005-005",
+                "type": "diet",
+                "name": "2g sodium, 1500 mL fluid restriction",
+                "ordered_at": admission_p005,
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P005-006",
+                "type": "lab",
+                "name": "BMP, BNP daily",
+                "ordered_at": admission_p005,
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P005-007",
+                "type": "consult",
+                "name": "Cardiology follow-up within 7 days post-discharge",
+                "ordered_at": (now - timedelta(days=1)).isoformat(),
+                "status": "pending",
+            },
+            {
+                "order_id": "ORD-P005-008",
+                "type": "device",
+                "name": "Foley catheter",
+                "ordered_at": admission_p005,
+                "inserted_at": admission_p005,
                 "status": "active",
             },
         ],
@@ -507,8 +640,8 @@ def seed_inpatients(db):
         print(f"  ✓ {pid}: {len(orders)} active orders")
 
     # --- Progress Notes ---
-    # P004: last note >26h ago → triggers "no note in 24h" WARNING
-    # P005: recent note within 12h → no warning
+    # P004: last note >26h ago → triggers note-currency WARNING
+    # P005: 3 notes with last note 10h ago → no warning; trajectory narrative present
     progress_notes = {
         "P004": [
             {
@@ -517,10 +650,9 @@ def seed_inpatients(db):
                 "role": "attending",
                 "created_at": admission_p004,
                 "note_text": (
-                    "62M admitted via ED with sepsis secondary to pneumonia. "
-                    "Hypotensive on arrival, started on vasopressors. "
-                    "Blood cultures drawn, empirical antibiotics initiated. "
-                    "Foley placed for strict I&Os. ICU-level monitoring."
+                    "62M admitted via ED with sepsis, likely source: community-acquired pneumonia. "
+                    "Started on broad-spectrum antibiotics and vasopressor support. "
+                    "Initial lactate 4.1 trending down. Intubated for airway protection."
                 ),
             },
             {
@@ -529,9 +661,11 @@ def seed_inpatients(db):
                 "role": "resident",
                 "created_at": (now - timedelta(hours=26)).isoformat(),
                 "note_text": (
-                    "Overnight: hemodynamically marginal, MAP 62 on norepi 0.08. "
-                    "Urine output 20 mL/hr. Creatinine trending up to 2.3. "
-                    "Family updated on ICU course."
+                    "Overnight: hemodynamically marginal on norepinephrine 0.08 mcg/kg/min. "
+                    "Repeat lactate 3.2, downtrending. Blood cultures x2 — E. coli identified, "
+                    "susceptibilities pending. Creatinine rising (1.4 → 2.1 → 2.4): "
+                    "AKI stage 2 — ID consult and renal ultrasound ordered. "
+                    "Glucose 218 — added to insulin sliding scale. Urine output 22 mL/hr."
                 ),
             },
         ],
@@ -542,22 +676,32 @@ def seed_inpatients(db):
                 "role": "attending",
                 "created_at": admission_p005,
                 "note_text": (
-                    "74F admitted with acute CHF exacerbation. "
-                    "BNP 1840, 3kg weight gain. IV diuresis initiated. "
-                    "AFib with RVR on admission, rate-controlled with metoprolol. "
-                    "CKD stage 3 — renal function monitoring daily."
+                    "76F admitted with acute CHF exacerbation, weight up 5 kg from baseline. "
+                    "Known EF 30% (last echo 2025-08). Started IV diuresis. "
+                    "CXR: bilateral pulmonary edema, cardiomegaly. BNP 2100."
                 ),
             },
             {
                 "note_id": "PN-P005-002",
+                "author": "Dr. Emily Lee",
+                "role": "resident",
+                "created_at": (now - timedelta(days=2)).isoformat(),
+                "note_text": (
+                    "Day 2: net negative 2.1L. Weight 74.8 kg. BNP 1250. "
+                    "O2 requirements reduced to 2L NC. HR rate-controlled in 70s."
+                ),
+            },
+            {
+                "note_id": "PN-P005-003",
                 "author": "Dr. Michael Jones",
                 "role": "attending",
                 "created_at": (now - timedelta(hours=10)).isoformat(),
                 "note_text": (
-                    "Day 4: Diuresis progressing well, -1.2 kg today. "
-                    "BNP downtrending. Rate controlled in 70s. "
-                    "Creatinine stable at 1.8. Consider discharge planning — "
-                    "social work consult for home health evaluation."
+                    "Day 4: significant clinical improvement. Weight 72.4 kg (total -6.4 kg). "
+                    "BNP 620 (trending down). Room air O2 sat 96%. "
+                    "Creatinine 1.7 — rising trend (1.4→1.5→1.6→1.7), monitor closely; "
+                    "Lisinopril held. Plan: transition furosemide to oral, target discharge tomorrow. "
+                    "Needs cardiology follow-up, daily weights at home, return precautions."
                 ),
             },
         ],

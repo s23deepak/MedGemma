@@ -228,39 +228,44 @@
 
 ---
 
-## 6. Diagnostic Council
+## 6. Diagnostic Council — LangGraph StateGraph
+
+Orchestrated via a LangGraph `StateGraph` (`src/council/graph.py`).
 
 ```
-  ┌──────────────────────────────────────────┐
-  │   Case: Symptoms + History + Imaging     │
-  └────┬─────┬──────┬──────┬──────┬──────────┘
-       │     │      │      │      │
-       ▼     ▼      ▼      ▼      ▼
-     Op.1  Op.2   Op.3   Op.4   Op.5
-   (indep) (indep) (indep) (indep) (indep)
-       │     │      │      │      │
-       └─────┴──────┼──────┴──────┘
-                    ▼
-          ┌─────────────────┐
-          │ Consensus       │
-          │ Analysis        │
-          ├─────────────────┤
-          │ STRONG    >80%  │
-          │ MODERATE  60-80%│
-          │ WEAK      40-60%│
-          │ SPLIT     <40%  │
-          └────────┬────────┘
-                   │
-                   ▼
-          ┌─────────────────┐
-          │ PubMed Zebra    │
-          │ Hunt (auto)     │
-          │                 │
-          │ case_matcher on │
-          │ symptoms →      │
-          │ rare_diagnoses  │
-          └─────────────────┘
+  START
+    └─► initialize
+          └─► retrieve_context  (RAG: compress raw_note → top-5 symptom-relevant excerpts)
+                └─► [Send×N] generate_r1_opinion  (parallel fan-out, N=num_rollouts default 5)
+                      │
+                      │  Each branch: stateless prompt, sees only raw case + JSON schema
+                      │  Outputs merged via Annotated[list[dict], operator.add]
+                      │
+                      └─► calculate_consensus
+                            ├─ STRONG    > 80% agreement
+                            ├─ MODERATE  60–80%
+                            ├─ WEAK      40–60%
+                            └─ SPLIT     < 40%
+                                  │
+                                  └─► run_pubmed  (PubMed Zebra Hunt — case_matcher)
+                                        │
+                              ┌─────────┴─────────────────────────────────┐
+                              │ iterative mode                             │ standard mode
+                              │ + rare diagnoses found                     │ or no rare dx
+                              ▼                                            ▼
+               [Send×N] generate_r2_opinion                              END
+                 (rare dx names injected                (short-circuit,
+                  into each R2 prompt)                   skip Round 2)
+                        │
+                        └─► calculate_r2_consensus
+                              │
+                              └─► END  (consensus_shifted flag set if R2 ≠ R1)
 ```
+
+Key LangGraph patterns:
+- `Annotated[list[dict], operator.add]` on `opinions` and `r2_opinions` — merges parallel Send branches without race conditions
+- Two distinct node names (`generate_r1_opinion` → `calculate_consensus`, `generate_r2_opinion` → `calculate_r2_consensus`) share the same `_opinion_node` function — enables distinct downstream routing without code duplication
+- `retrieve_context` is a no-op when `raw_note` is empty — zero overhead for standard usage
 
 ---
 
@@ -378,7 +383,8 @@
 | Reasoning | MedGemma | 4B multimodal | Medical analysis and SOAP |
 | Correlation | Clinical Correlator | Rule-based | Artifact detection, incidental vs correlated |
 | Intelligence | Clinical Intel | Rule-based | ICD-10, drug interactions, alerts |
-| Council | Diagnostic Council | Multi-rollout | 3–7 opinions + consensus + PubMed |
+| Council | Diagnostic Council | LangGraph StateGraph + MedGemma | N rollouts (default 5) parallel opinions + consensus + iterative PubMed evidence loop |
+| RAG | Context Compression | sentence-transformers / TF-IDF | Chunks raw clinical notes; retrieves top-5 symptom-relevant excerpts before council fan-out |
 | PubMed | Synthesis Agent | NCBI E-utils + LLM | Case matching, EBM validation, DDI monitoring |
 | Trends | Local Trend Engine | RSS + MeSH + Firestore cache | Location-aware environmental/public-health context |
 | AI Chat | AI Portal | MedGemma + Canvas | Multimodal physician chat with annotations |
@@ -389,6 +395,12 @@
 | EHR | FHIR Server | Mock / Real | Patient data storage |
 | Frontend | FastAPI + JS | WebSocket + REST | Real-time UI, 6 feature pages |
 | Testing | pytest | 72 tests | Full coverage, no GPU needed |
+| Audit | AuditLogger | deque ring buffer + Firestore | Immutable event trail for all clinical AI actions |
+| Performance | PerfTracker | deque rolling stats | Latency profiling for major API operations |
+| Hospital | HospitalRegistry | In-memory + Firestore | Multi-tenant hospital profiles with feature flags |
+| Prior Auth | PriorAuthService | In-memory + Firestore | Prior auth detect, approve, deny workflow |
+| Referral | ReferralLetterService | In-memory + Firestore | AI-generated specialist referral letters |
+| Med Reconciliation | InpatientDischargePlanner | FHIR comparison | Admission vs. inpatient medication diff |
 
 ---
 
@@ -417,3 +429,17 @@ Notes:
 - Trend context is supportive and non-diagnostic.
 - Cache backend is configurable: `auto` / `firestore` / `local`.
 - Optional vector enrichment can be toggled via env.
+
+---
+
+## 12. New Backend Services
+
+| Service | Module | Routes |
+|---------|--------|--------|
+| Audit Logging | `src/audit/audit_logger.py` | `GET /api/audit/recent`, `GET /api/audit/patient/{id}` |
+| Performance Profiling | `src/monitoring/perf_tracker.py` | `GET /api/metrics` |
+| Prior Auth | `src/auth/prior_auth.py` | `GET/POST /api/prior-auth/*` |
+| Referral Letters | `src/referral/referral_letter.py` | `GET/POST /api/referral/*` |
+| Medication Reconciliation | `src/inpatient/discharge.py` | `GET /api/inpatient/{id}/med-reconciliation` |
+| Multi-Hospital Registry | `src/config/hospital_config.py` | `GET/POST /api/hospitals/*` |
+| LACE + Expanded Safety | `src/inpatient/discharge.py`, `src/inpatient/safety.py` | Embedded in discharge and safety routes |

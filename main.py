@@ -38,6 +38,9 @@ from src.inpatient import (
     get_safety_service,
     get_discharge_planner,
 )
+from src.audit.audit_logger import get_audit_logger
+from src.monitoring.perf_tracker import track_perf, get_stats as get_perf_stats
+from src.config.hospital_config import get_hospital_registry, Hospital
 
 # Configure logging
 logging.basicConfig(
@@ -69,6 +72,10 @@ rounding_service = None
 sbar_service = None
 safety_service = None
 discharge_planner = None
+
+# Cross-cutting services
+audit_logger = None
+hospital_registry = None
 
 # Store active sessions
 sessions: dict[str, dict] = {}
@@ -184,6 +191,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global fhir_server, soap_generator, treatment_service, discharge_monitor, prior_auth_service, pubmed_agent, shift_brief_service, referral_service, simulation_engine, local_trends_service, trends_refresh_task
     global rounding_service, sbar_service, safety_service, discharge_planner
+    global audit_logger, hospital_registry
     
     logger.info("Starting MedGemma Clinical Assistant...")
 
@@ -223,6 +231,8 @@ async def lifespan(app: FastAPI):
     sbar_service      = get_sbar_service(fhir_server)
     safety_service    = get_safety_service(fhir_server)
     discharge_planner = get_discharge_planner(fhir_server)
+    audit_logger = get_audit_logger()
+    hospital_registry = get_hospital_registry()
     logger.info("Treatment summary, discharge monitoring, prior auth, PubMed synthesis, shift brief, referral letter, simulation, and inpatient services initialized")
 
     # Run 60-day hospital-case finalization in background (non-blocking)
@@ -566,6 +576,11 @@ async def generate_soap(
                 raw_soap_text=result.get("soap_note")
             )
             session["soap_note"] = enhanced_soap
+
+            if audit_logger:
+                _pid = (session.get("patient_context") or {}).get("patient", {}).get("id")
+                audit_logger.log("SOAP_GENERATED", "generate_soap", patient_id=_pid,
+                                 details={"session_id": session_id})
 
             # Extract clinical orders for HITL approval
             pending_orders = soap_generator.extract_clinical_orders(enhanced_soap, transcription)
@@ -1120,6 +1135,7 @@ async def get_compliance_report():
 
 # Diagnostic Council API endpoints
 @app.post("/api/council/deliberate")
+@track_perf("council_deliberation")
 async def council_deliberate(request: Request):
     """Run diagnostic council deliberation."""
     from src.council import get_diagnostic_council
@@ -1140,11 +1156,15 @@ async def council_deliberate(request: Request):
         vitals=vitals,
         raw_note=raw_note,
     )
-    
+
+    if audit_logger:
+        audit_logger.log("COUNCIL_DELIBERATION", "deliberate",
+                         details={"symptom_count": len(symptoms)})
     return deliberation.to_dict()
 
 
 @app.post("/api/council/iterative-deliberate")
+@track_perf("council_iterative")
 async def council_iterative_deliberate(request: Request):
     """Run 2-round iterative diagnostic council with PubMed evidence feedback."""
     from src.council import get_diagnostic_council
@@ -1169,6 +1189,9 @@ async def council_iterative_deliberate(request: Request):
         vitals=vitals,
         raw_note=raw_note,
     )
+    if audit_logger:
+        audit_logger.log("COUNCIL_DELIBERATION", "iterative_deliberate",
+                         details={"symptom_count": len(symptoms)})
     return result.to_dict()
 
 
@@ -2135,6 +2158,7 @@ async def api_inpatient_ward():
 
 
 @app.post("/api/inpatient/{patient_id}/rounding-note")
+@track_perf("rounding")
 async def api_rounding_note(patient_id: str):
     """Generate a 24-hour inpatient progress note for a patient."""
     if rounding_service is None:
@@ -2142,10 +2166,13 @@ async def api_rounding_note(patient_id: str):
     result = rounding_service.generate_progress_note(patient_id, agent=agent)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
+    if audit_logger:
+        audit_logger.log("HANDOFF_GENERATED", "rounding", patient_id=patient_id)
     return JSONResponse(content=result)
 
 
 @app.post("/api/inpatient/{patient_id}/sbar")
+@track_perf("handoff")
 async def api_sbar(patient_id: str):
     """Generate an SBAR handoff packet with completeness audit."""
     if sbar_service is None:
@@ -2153,6 +2180,8 @@ async def api_sbar(patient_id: str):
     result = sbar_service.generate_sbar(patient_id, agent=agent)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
+    if audit_logger:
+        audit_logger.log("HANDOFF_GENERATED", "sbar", patient_id=patient_id)
     return JSONResponse(content=result)
 
 
@@ -2175,6 +2204,7 @@ async def api_patient_safety(patient_id: str):
 
 
 @app.post("/api/inpatient/{patient_id}/discharge-summary")
+@track_perf("discharge_summary")
 async def api_discharge_summary(patient_id: str, request: Request):
     """Generate a patient-friendly discharge summary with readmission risk assessment."""
     if discharge_planner is None:
@@ -2185,7 +2215,215 @@ async def api_discharge_summary(patient_id: str, request: Request):
         payload = {}
     soap_note = payload.get("soap_note", "") if payload else ""
     result = discharge_planner.generate_discharge_summary(patient_id, soap_note=soap_note, agent=agent)
+    if audit_logger:
+        audit_logger.log("DISCHARGE_PLANNED", "discharge_summary", patient_id=patient_id)
     return JSONResponse(content=result.to_dict())
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Audit log routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/audit/recent")
+async def api_audit_recent(limit: int = 100):
+    """Return the most recent audit events."""
+    if audit_logger is None:
+        raise HTTPException(status_code=503, detail="Audit logger not initialized")
+    return {"events": audit_logger.get_recent(limit=limit), "count": limit}
+
+
+@app.get("/api/audit/patient/{patient_id}")
+async def api_audit_patient(patient_id: str, limit: int = 50):
+    """Return audit events for a specific patient."""
+    if audit_logger is None:
+        raise HTTPException(status_code=503, detail="Audit logger not initialized")
+    events = audit_logger.get_for_patient(patient_id, limit=limit)
+    return {"patient_id": patient_id, "events": events, "count": len(events)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Performance metrics route
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/metrics")
+async def api_metrics():
+    """Return latency statistics for tracked operations."""
+    return get_perf_stats()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Prior auth routes (request/{auth_id} MUST come before /{patient_id})
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/prior-auth/request/{auth_id}")
+async def api_get_prior_auth_by_id(auth_id: str):
+    """Look up a prior auth request by auth_id (cross-patient)."""
+    req = prior_auth_service.find_by_auth_id(auth_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Prior auth request not found")
+    return req
+
+
+@app.post("/api/prior-auth/request/{auth_id}/approve")
+async def api_approve_prior_auth(auth_id: str, request: Request):
+    """Approve a prior auth request."""
+    payload = await request.json()
+    req = prior_auth_service.find_by_auth_id(auth_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Prior auth request not found")
+    result = prior_auth_service.approve(
+        req["patient_id"], auth_id,
+        approved_by=payload.get("approved_by", ""),
+        notes=payload.get("notes", ""),
+    )
+    if not result:
+        raise HTTPException(status_code=400, detail="Transition failed")
+    return result
+
+
+@app.post("/api/prior-auth/request/{auth_id}/deny")
+async def api_deny_prior_auth(auth_id: str, request: Request):
+    """Deny a prior auth request."""
+    payload = await request.json()
+    req = prior_auth_service.find_by_auth_id(auth_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Prior auth request not found")
+    result = prior_auth_service.deny(
+        req["patient_id"], auth_id,
+        reason=payload.get("reason", "Not medically necessary"),
+        notes=payload.get("notes", ""),
+    )
+    if not result:
+        raise HTTPException(status_code=400, detail="Transition failed")
+    return result
+
+
+@app.get("/api/prior-auth/{patient_id}")
+async def api_get_patient_prior_auths(patient_id: str):
+    """Return all prior auth requests for a patient."""
+    requests = prior_auth_service.get_all(patient_id)
+    return {"patient_id": patient_id, "requests": requests, "count": len(requests)}
+
+
+@app.post("/api/prior-auth/{patient_id}/detect")
+async def api_detect_prior_auth(patient_id: str, request: Request):
+    """Auto-detect and create prior auth requests from order text."""
+    payload = await request.json()
+    encounter_id = payload.get("encounter_id", "")
+    orders_text = payload.get("orders_text", "")
+    clinical_indication = payload.get("clinical_indication", "")
+    orders = [o.strip() for o in orders_text.replace(",", "\n").splitlines() if o.strip()]
+    created = prior_auth_service.detect_and_create(
+        patient_id=patient_id,
+        encounter_id=encounter_id,
+        orders=orders,
+        clinical_indication=clinical_indication,
+    )
+    return {"patient_id": patient_id, "created": [r.to_dict() for r in created], "count": len(created)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Referral letter routes (inpatient-style API)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/referral/{patient_id}")
+async def api_get_referral_letters(patient_id: str):
+    """Return all referral letters for a patient."""
+    letters = referral_service.get_letters(patient_id)
+    return {"patient_id": patient_id, "letters": letters, "count": len(letters)}
+
+
+@app.post("/api/referral/{patient_id}/generate")
+async def api_generate_referral(patient_id: str, request: Request):
+    """Generate referral letter(s) for a patient encounter."""
+    payload = await request.json()
+    encounter_id = payload.get("encounter_id", "")
+    referral_orders = payload.get("referral_orders", [])
+    soap_note = payload.get("soap_note")
+    letters = referral_service.generate_letters_for_encounter(
+        patient_id=patient_id,
+        encounter_id=encounter_id,
+        referral_orders=referral_orders,
+        soap_note=soap_note,
+        agent=agent,
+    )
+    return {"patient_id": patient_id, "letters": [l.to_dict() for l in letters], "count": len(letters)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Medication reconciliation route
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/inpatient/{patient_id}/med-reconciliation")
+async def api_med_reconciliation(patient_id: str):
+    """Return medication reconciliation for an inpatient."""
+    if discharge_planner is None:
+        raise HTTPException(status_code=503, detail="Discharge planner not initialized")
+    recon = discharge_planner.reconcile_medications(patient_id)
+    if recon is None:
+        raise HTTPException(status_code=404, detail="Patient not found or no medication data")
+    return JSONResponse(content=recon.to_dict())
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Hospital / multi-tenant routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/hospitals")
+async def api_list_hospitals():
+    """List all registered hospital profiles."""
+    if hospital_registry is None:
+        raise HTTPException(status_code=503, detail="Hospital registry not initialized")
+    return {"hospitals": hospital_registry.list_all()}
+
+
+@app.get("/api/hospitals/{hospital_id}")
+async def api_get_hospital(hospital_id: str):
+    """Get a single hospital profile."""
+    if hospital_registry is None:
+        raise HTTPException(status_code=503, detail="Hospital registry not initialized")
+    hosp = hospital_registry.get(hospital_id)
+    if not hosp:
+        raise HTTPException(status_code=404, detail="Hospital not found")
+    return hosp.to_dict()
+
+
+@app.post("/api/hospitals")
+async def api_add_hospital(request: Request):
+    """Register a new hospital profile."""
+    if hospital_registry is None:
+        raise HTTPException(status_code=503, detail="Hospital registry not initialized")
+    payload = await request.json()
+    hospital_id = payload.get("hospital_id")
+    name = payload.get("name")
+    if not hospital_id or not name:
+        raise HTTPException(status_code=400, detail="hospital_id and name are required")
+    hosp = Hospital(
+        hospital_id=hospital_id,
+        name=name,
+        timezone=payload.get("timezone", "UTC"),
+        formulary_restrictions=payload.get("formulary_restrictions", []),
+        branding=payload.get("branding", {"logo_url": "", "primary_color": "#2563eb"}),
+        features_enabled=payload.get("features_enabled", {}),
+        contact_info=payload.get("contact_info", {}),
+    )
+    registered = hospital_registry.add(hosp)
+    return registered.to_dict()
+
+
+@app.get("/api/hospitals/{hospital_id}/patients")
+async def api_hospital_patients(hospital_id: str):
+    """List patients belonging to a specific hospital."""
+    if hospital_registry is None:
+        raise HTTPException(status_code=503, detail="Hospital registry not initialized")
+    if not hospital_registry.get(hospital_id):
+        raise HTTPException(status_code=404, detail="Hospital not found")
+    all_patients = fhir_server.list_patients()
+    matched = [
+        p for p in all_patients
+        if fhir_server.patients.get(p["id"], {}).get("hospital_id") == hospital_id
+    ]
+    return {"hospital_id": hospital_id, "patients": matched, "count": len(matched)}
 
 
 if __name__ == "__main__":

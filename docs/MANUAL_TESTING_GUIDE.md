@@ -191,6 +191,42 @@ fetch('/api/council/deliberate', {
 5. View deliberation history:
    - `http://localhost:8000/api/council/history`
 
+**Test iterative (Deep Dive) mode:**
+
+```javascript
+fetch('/api/council/iterative-deliberate', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({
+    symptoms: ['chest pain', 'shortness of breath', 'cough', 'unexplained weight loss'],
+    patient_history: 'Former smoker, 20 pack-year history',
+    imaging_findings: 'Right lower lobe opacity, mediastinal widening',
+    num_rollouts: 5
+  })
+}).then(r => r.json()).then(console.log)
+```
+
+- Check response includes `r2_opinions`, `r2_consensus_diagnosis`, `r2_consensus_strength`
+- `consensus_shifted` boolean should be present (true if R2 diagnosis differs from R1)
+
+**Test RAG context compression (`raw_note` parameter):**
+
+```javascript
+fetch('/api/council/deliberate', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({
+    symptoms: ['chest pain', 'dyspnea'],
+    patient_history: 'HTN',
+    imaging_findings: 'Mild cardiomegaly',
+    raw_note: 'Patient is a 65-year-old male with a long history of hypertension and type 2 diabetes. He presents today with progressive exertional chest pain over the last two weeks. He denies rest pain or radiation. He has had prior cardiac workup in 2022 showing mild LVH. Current medications include metformin, lisinopril, and atorvastatin. Review of systems is positive for dyspnea on exertion and mild ankle swelling. Examination reveals BP 145/88, HR 82, SpO2 97%. Lungs clear. Mild bilateral ankle edema noted.'
+  })
+}).then(r => r.json()).then(console.log)
+```
+
+- The `raw_note` is chunked and the top-5 most symptom-relevant excerpts are extracted and injected into each opinion prompt
+- Response should be the same structure — the RAG compression is internal to the graph
+
 ---
 
 ### 3.7 Patient Portal
@@ -437,6 +473,272 @@ fetch('/api/pubmed/validate-plan', {
 
 ---
 
+### 3.14 Inpatient Workflow
+
+**List admitted patients:**
+
+```javascript
+fetch('/api/inpatient/ward')
+  .then(r => r.json()).then(console.log)
+```
+
+- Should return a list of admitted patients — demo data includes Raymond Okafor (P004, ICU Sepsis) and Dorothy Chen (P005, CHF)
+
+**Generate a rounding progress note:**
+
+```javascript
+fetch('/api/inpatient/P004/rounding-note', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({})
+}).then(r => r.json()).then(console.log)
+```
+
+- Check response includes `note_text` (full SOAP), `todo_items` list, `los_hours`, `source`
+
+**Generate an SBAR handoff:**
+
+```javascript
+fetch('/api/inpatient/P004/sbar', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({})
+}).then(r => r.json()).then(console.log)
+```
+
+- Check response includes `sbar` object with `situation`, `background`, `assessment`, `recommendation`, `contingency_plans`
+- Check `completeness` object: `score`, `percentage`, `checks`, `missing_fields`
+- A score below 100% means some required fields are absent — those are listed in `missing_fields`
+
+**Run the safety watchlist:**
+
+```javascript
+fetch('/api/inpatient/safety')
+  .then(r => r.json()).then(console.log)
+```
+
+- Raymond Okafor (P004) should trigger a **CRITICAL** VTE prophylaxis alert (admitted >24h, no order)
+- Alerts sorted critical-first; each has `suggested_action` and `ai_explanation` fields
+
+**Generate a discharge summary:**
+
+```javascript
+fetch('/api/inpatient/P005/discharge-summary', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({})
+}).then(r => r.json()).then(console.log)
+```
+
+- Dorothy Chen (P005, CHF + CKD) should return `readmission_risk: "high"`
+- Check `missing_fields` — any required fields absent from her record are explicitly listed as `MISSING`
+- Check `medications` array contains per-drug counselling notes
+
+---
+
+---
+
+### 3.15 Expanded Safety Rules
+
+Run the safety dashboard and verify new alert types:
+
+```javascript
+fetch('/api/inpatient/safety')
+  .then(r => r.json()).then(console.log)
+```
+
+For P004 (Raymond Okafor, ICU sepsis), expect alerts for:
+- `falls_risk` — age and ICU admission factors
+- `antibiotic_deescalation` — broad-spectrum antibiotics with available cultures
+- `glycemic_control` — insulin active without recent glucose check
+- Original VTE prophylaxis CRITICAL alert still present
+
+Patient-specific safety check:
+```javascript
+fetch('/api/inpatient/P004/safety')
+  .then(r => r.json()).then(console.log)
+```
+
+---
+
+### 3.16 LACE Readmission Scoring
+
+Generate a discharge summary and check the LACE fields:
+
+```javascript
+fetch('/api/inpatient/P005/discharge-summary', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({})
+}).then(r => r.json()).then(d => {
+  console.log('LACE score:', d.lace_score);
+  console.log('LACE components:', d.lace_components);
+  console.log('Readmission risk:', d.readmission_risk);
+})
+```
+
+- `lace_score` should be ≥10 for Dorothy Chen (CHF + CKD) → `readmission_risk: "high"`
+- `lace_components` shows `{l, a, c, e}` breakdown
+
+---
+
+### 3.17 Medication Reconciliation
+
+```javascript
+fetch('/api/inpatient/P004/med-reconciliation')
+  .then(r => r.json()).then(console.log)
+```
+
+- `added_meds` — ICU medications started after admission (piperacillin, norepinephrine, insulin)
+- `discontinued_meds` — pre-admission medications not continued
+- `reconciliation_status` — `"complete"` or `"review_required"`
+
+---
+
+### 3.18 Prior Authorization
+
+**Detect orders requiring prior auth:**
+
+```javascript
+fetch('/api/prior-auth/P001/detect', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({
+    encounter_id: 'E1',
+    orders_text: 'MRI brain, adalimumab 40mg',
+    clinical_indication: 'headache with visual changes'
+  })
+}).then(r => r.json()).then(console.log)
+```
+
+- Expect 2 prior auth requests created: MRI (imaging) + adalimumab (medication)
+
+**View all prior auths for patient:**
+
+```javascript
+fetch('/api/prior-auth/P001')
+  .then(r => r.json()).then(console.log)
+```
+
+**Look up by auth_id** (use an auth_id from above):
+
+```javascript
+fetch('/api/prior-auth/request/AUTH_ID_HERE')
+  .then(r => r.json()).then(console.log)
+```
+
+**Approve a request:**
+
+```javascript
+fetch('/api/prior-auth/request/AUTH_ID_HERE/approve', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({approved_by: 'dr.smith@hospital.org', notes: 'Clinically indicated'})
+}).then(r => r.json()).then(console.log)
+```
+
+**Deny a request:**
+
+```javascript
+fetch('/api/prior-auth/request/AUTH_ID_HERE/deny', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({reason: 'Not medically necessary', notes: 'Try conservative management first'})
+}).then(r => r.json()).then(console.log)
+```
+
+---
+
+### 3.19 Referral Letters
+
+**Generate referral letters:**
+
+```javascript
+fetch('/api/referral/P001/generate', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({
+    encounter_id: 'E1',
+    referral_orders: ['Neurology referral for worsening migraines', 'Ophthalmology referral for visual aura'],
+    soap_note: null
+  })
+}).then(r => r.json()).then(console.log)
+```
+
+- Expect 2 letters in response, each with `letter_id`, `specialty`, `letter_text`, `created_at`
+
+**View all referral letters:**
+
+```javascript
+fetch('/api/referral/P001')
+  .then(r => r.json()).then(console.log)
+```
+
+---
+
+### 3.20 Audit Log
+
+```javascript
+// Most recent 10 events
+fetch('/api/audit/recent?limit=10')
+  .then(r => r.json()).then(console.log)
+
+// Events for a specific patient
+fetch('/api/audit/patient/P004')
+  .then(r => r.json()).then(console.log)
+```
+
+- Each event has: `event_id`, `timestamp`, `event_type`, `action`, `patient_id`, `user_id`, `success`
+- Run some SOAP/council/discharge calls first to populate the log
+
+---
+
+### 3.21 Performance Metrics
+
+```javascript
+fetch('/api/metrics')
+  .then(r => r.json()).then(console.log)
+```
+
+- Returns `{council_deliberation: {avg_ms, min_ms, max_ms, count}, rounding: {...}, ...}`
+- Run council and inpatient routes first to populate; empty object if no calls made yet
+
+---
+
+### 3.22 Hospital Registry (Multi-Tenant)
+
+```javascript
+// List all hospitals
+fetch('/api/hospitals')
+  .then(r => r.json()).then(console.log)
+
+// Get single hospital
+fetch('/api/hospitals/COMMUNITY')
+  .then(r => r.json()).then(console.log)
+
+// Patients for a hospital
+fetch('/api/hospitals/GENERAL/patients')
+  .then(r => r.json()).then(console.log)
+
+// Add a new hospital
+fetch('/api/hospitals', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({
+    hospital_id: 'REGIONAL',
+    name: 'Regional Medical Center',
+    timezone: 'America/Los_Angeles',
+    formulary_restrictions: ['pembrolizumab'],
+    features_enabled: {audit_log: true, prior_auth: true, referral: true, simulation: false}
+  })
+}).then(r => r.json()).then(console.log)
+```
+
+- GENERAL hospital patients: P001 (Sarah Wilson), P002 (Carlos Martinez), P003 (John Doe), P004 (Raymond Okafor)
+- COMMUNITY hospital patients: P005 (Dorothy Chen)
+
+---
+
 ## 4. Quick Smoke Test (All in One)
 
 Paste this into the browser console to hit every major endpoint:
@@ -525,6 +827,71 @@ async function smokeTest() {
   // Memory
   r = await fetch('/api/memory/P001');
   results.memory = r.status;
+
+  // Inpatient — ward list
+  r = await fetch('/api/inpatient/ward');
+  results.inpatient_ward = r.status;
+
+  // Inpatient — rounding note
+  r = await fetch('/api/inpatient/P004/rounding-note', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({})
+  });
+  results.rounding_note = r.status;
+
+  // Inpatient — SBAR
+  r = await fetch('/api/inpatient/P004/sbar', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({})
+  });
+  results.sbar = r.status;
+
+  // Inpatient — safety dashboard
+  r = await fetch('/api/inpatient/safety');
+  results.safety_dashboard = r.status;
+
+  // Inpatient — discharge summary
+  r = await fetch('/api/inpatient/P005/discharge-summary', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({})
+  });
+  results.discharge_summary = r.status;
+
+  // Audit log
+  r = await fetch('/api/audit/recent?limit=5');
+  results.audit_recent = r.status;
+
+  r = await fetch('/api/audit/patient/P004');
+  results.audit_patient = r.status;
+
+  // Performance metrics
+  r = await fetch('/api/metrics');
+  results.metrics = r.status;
+
+  // Prior auth
+  r = await fetch('/api/prior-auth/P001');
+  results.prior_auth_list = r.status;
+
+  r = await fetch('/api/prior-auth/P001/detect', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({encounter_id: 'E1', orders_text: 'MRI brain', clinical_indication: 'headache'})
+  });
+  results.prior_auth_detect = r.status;
+
+  // Medication reconciliation
+  r = await fetch('/api/inpatient/P004/med-reconciliation');
+  results.med_reconciliation = r.status;
+
+  // Hospitals
+  r = await fetch('/api/hospitals');
+  results.hospitals = r.status;
+
+  r = await fetch('/api/hospitals/GENERAL/patients');
+  results.hospital_patients = r.status;
 
   console.table(results);
 

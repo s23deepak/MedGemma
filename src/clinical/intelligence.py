@@ -3,8 +3,21 @@ Clinical Intelligence Module
 Provides ICD-10 codes, drug interactions, and clinical decision support.
 """
 
+import functools
+import json as _json
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
+
+# Negation-aware critical finding detection
+try:
+    from src.clinical.negation import get_negation_detector, AssertionStatus
+    _NEGATION_AVAILABLE = True
+except ImportError:
+    _NEGATION_AVAILABLE = False
+    get_negation_detector = None
+    AssertionStatus = None
 
 
 # Common ICD-10 codes for demonstration
@@ -93,6 +106,48 @@ CRITICAL_FINDINGS = [
 ]
 
 
+
+# ── NLM ICD-10-CM API lookup (cached, stdlib-only, 2 s timeout) ──────────────
+
+@functools.lru_cache(maxsize=256)
+def _nlm_icd10_lookup_cached(diagnosis_text: str) -> dict | None:
+    """
+    Query the NLM Clinical Tables ICD-10-CM API for a single term.
+
+    Results are cached via functools.lru_cache (256 entries).
+    Times out after 2 seconds and returns None on any failure.
+
+    Args:
+        diagnosis_text: Lowercase, stripped diagnosis or symptom string.
+
+    Returns:
+        {"code": str, "description": str} on success, None otherwise.
+    """
+    try:
+        encoded = urllib.parse.quote(diagnosis_text[:80])
+        url = (
+            "https://clinicaltables.nlm.nih.gov/api/icd10cm/v3/search"
+            f"?sf=code,name&terms={encoded}&maxList=1"
+        )
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "MedGemma/1.0 ClinicalAssistant"}
+        )
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        # Response format: [total, [[code, name], ...], extra, [[code, name], ...]]
+        # When sf=code,name the matches are in data[3] as [[code, name], ...]
+        if data and len(data) >= 4 and data[3]:
+            first = data[3][0]
+            if isinstance(first, list) and len(first) >= 2:
+                return {"code": first[0], "description": first[1]}
+        # Fallback: data[1] is the raw code list (may be present without sf param)
+        if data and len(data) >= 2 and data[1]:
+            return {"code": data[1][0], "description": diagnosis_text.title()}
+        return None
+    except Exception:
+        return None
+
+
 @dataclass
 class DiagnosisWithConfidence:
     """Diagnosis with confidence score and ICD-10 code."""
@@ -165,21 +220,47 @@ class ClinicalIntelligence:
         self.icd10_codes = ICD10_CODES
         self.drug_interactions = DRUG_INTERACTIONS
         self.critical_findings = CRITICAL_FINDINGS
+
+        # Negation detector: prevents false-positive critical alerts like
+        # "no evidence of PE" triggering a pulmonary embolism alert.
+        self._negation_detector = None
+        if _NEGATION_AVAILABLE and get_negation_detector:
+            try:
+                self._negation_detector = get_negation_detector()
+            except Exception:
+                pass
     
     def lookup_icd10(self, diagnosis: str) -> dict | None:
-        """Look up ICD-10 code for a diagnosis."""
+        """
+        Look up ICD-10 code for a diagnosis.
+
+        Cascade order:
+          1. Direct match in local dictionary
+          2. Partial match in local dictionary
+          3. NLM Clinical Tables API (2 s timeout, 256-entry LRU cache)
+        """
         diagnosis_lower = diagnosis.lower().strip()
-        
-        # Direct match
+
+        # 1. Direct local match
         if diagnosis_lower in self.icd10_codes:
             return self.icd10_codes[diagnosis_lower]
-        
-        # Partial match
+
+        # 2. Partial local match
         for key, value in self.icd10_codes.items():
             if key in diagnosis_lower or diagnosis_lower in key:
                 return value
-        
-        return None
+
+        # 3. NLM API lookup (graceful degradation on failure/no internet)
+        return self.lookup_icd10_nlm(diagnosis_lower)
+
+    def lookup_icd10_nlm(self, diagnosis_text: str) -> dict | None:
+        """
+        Look up ICD-10 code via the NLM Clinical Tables ICD-10-CM API.
+
+        Results are cached (256-entry LRU). Returns None if the API is
+        unreachable, times out, or returns no matches.
+        """
+        return _nlm_icd10_lookup_cached(diagnosis_text.lower().strip())
     
     def check_drug_interactions(
         self, 
@@ -225,48 +306,69 @@ class ClinicalIntelligence:
         return interactions
     
     def detect_critical_findings(
-        self, 
-        text: str, 
+        self,
+        text: str,
         source: str = "transcription"
     ) -> list[CriticalAlert]:
         """
         Detect critical findings in text that require immediate attention.
-        
+
+        Uses NegEx negation detection (when available) to suppress false-positive
+        alerts like "no evidence of PE" or "rules out pneumothorax".  A finding
+        is only alerted if it appears in at least one AFFIRMED sentence — the
+        "any affirmed → alert" policy mirrors the clinical safety convention used
+        in symptom extraction.
+
         Args:
             text: Text to analyze (transcription, imaging report, etc.)
             source: Source of the text ("imaging", "transcription", "lab")
-            
+
         Returns:
             List of critical alerts
         """
         alerts = []
         text_lower = text.lower()
-        
+
         for finding in self.critical_findings:
-            if finding in text_lower:
-                # Determine severity and recommendation based on finding type
-                if finding in ["pulmonary embolism", "pe", "aortic dissection", 
-                              "cardiac tamponade", "tension pneumothorax", 
-                              "septic shock", "cardiac arrest", "stemi"]:
-                    severity = "critical"
-                    recommendation = "IMMEDIATE intervention required"
-                elif finding in ["mass", "tumor", "nodule", "malignancy", "cancer"]:
-                    severity = "critical"
-                    recommendation = "Urgent oncology referral and staging workup"
-                elif finding in ["pneumothorax", "fracture", "hemorrhage"]:
-                    severity = "critical"
-                    recommendation = "Urgent surgical/interventional consult"
-                else:
-                    severity = "warning"
-                    recommendation = "Close monitoring and follow-up required"
-                
-                alerts.append(CriticalAlert(
-                    finding=finding.title(),
-                    source=source,
-                    severity=severity,
-                    recommendation=recommendation
-                ))
-        
+            if finding not in text_lower:
+                continue
+
+            # ── Negation gate ─────────────────────────────────────────────────
+            # If a negation detector is available, suppress the alert when the
+            # only sentences mentioning this finding are negated or historical.
+            if self._negation_detector:
+                try:
+                    affirmed = self._negation_detector.filter_affirmed(
+                        text, [finding], keep_uncertain=True
+                    )
+                    if not affirmed:
+                        continue  # Finding is negated/historical in all contexts
+                except Exception:
+                    pass  # Degrade: treat as affirmed if detector fails
+
+            # Determine severity and recommendation based on finding type
+            if finding in ["pulmonary embolism", "pe", "aortic dissection",
+                           "cardiac tamponade", "tension pneumothorax",
+                           "septic shock", "cardiac arrest", "stemi"]:
+                severity = "critical"
+                recommendation = "IMMEDIATE intervention required"
+            elif finding in ["mass", "tumor", "nodule", "malignancy", "cancer"]:
+                severity = "critical"
+                recommendation = "Urgent oncology referral and staging workup"
+            elif finding in ["pneumothorax", "fracture", "hemorrhage"]:
+                severity = "critical"
+                recommendation = "Urgent surgical/interventional consult"
+            else:
+                severity = "warning"
+                recommendation = "Close monitoring and follow-up required"
+
+            alerts.append(CriticalAlert(
+                finding=finding.title(),
+                source=source,
+                severity=severity,
+                recommendation=recommendation
+            ))
+
         return alerts
     
     def generate_differential_with_confidence(

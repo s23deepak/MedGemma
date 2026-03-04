@@ -58,6 +58,7 @@ class MockFHIRServer:
             "birthDate": "1968-03-15",
             "address": [{"city": "Chicago", "state": "IL"}],
             "encounter_type": "outpatient",
+            "hospital_id": "GENERAL",
         }
         self.conditions["P001"] = [
             {
@@ -144,6 +145,7 @@ class MockFHIRServer:
             "birthDate": "1955-11-22",
             "address": [{"city": "Miami", "state": "FL"}],
             "encounter_type": "outpatient",
+            "hospital_id": "GENERAL",
         }
         self.conditions["P002"] = [
             {
@@ -225,6 +227,7 @@ class MockFHIRServer:
             "birthDate": "1980-07-10",
             "address": [{"city": "Los Angeles", "state": "CA"}],
             "encounter_type": "outpatient",
+            "hospital_id": "GENERAL",
         }
         self.conditions["P003"] = [
             {
@@ -339,6 +342,7 @@ class MockFHIRServer:
             "bed": "ICU-04",
             "code_status": "Full Code",
             "attending": "Dr. Sarah Smith",
+            "hospital_id": "GENERAL",
         }
         self.conditions["P004"] = [
             {
@@ -361,6 +365,13 @@ class MockFHIRServer:
                 "code": {"coding": [{"display": "Type 2 diabetes mellitus"}]},
                 "clinicalStatus": {"coding": [{"code": "active"}]},
                 "onsetDateTime": "2015-06-10",
+            },
+            {
+                "resourceType": "Condition", "id": "C033",
+                "subject": {"reference": "Patient/P004"},
+                "code": {"coding": [{"display": "Acute kidney injury stage 2"}]},
+                "clinicalStatus": {"coding": [{"code": "active"}]},
+                "onsetDateTime": (now - timedelta(hours=18)).isoformat(),
             },
         ]
         self.medications["P004"] = [
@@ -437,6 +448,70 @@ class MockFHIRServer:
                 "valueQuantity": {"value": 218, "unit": "mg/dL"},
                 "effectiveDateTime": (now - timedelta(hours=2)).isoformat(),
             },
+            # Trending labs added for richer AI reasoning
+            {
+                "resourceType": "Observation", "id": "O036",
+                "subject": {"reference": "Patient/P004"},
+                "code": {"coding": [{"display": "WBC"}]},
+                "valueQuantity": {"value": 19.2, "unit": "K/uL"},
+                "effectiveDateTime": (now - timedelta(hours=36)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O037",
+                "subject": {"reference": "Patient/P004"},
+                "code": {"coding": [{"display": "WBC"}]},
+                "valueQuantity": {"value": 16.8, "unit": "K/uL"},
+                "effectiveDateTime": (now - timedelta(hours=8)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O038",
+                "subject": {"reference": "Patient/P004"},
+                "code": {"coding": [{"display": "Creatinine"}]},
+                "valueQuantity": {"value": 1.4, "unit": "mg/dL"},
+                "effectiveDateTime": (now - timedelta(hours=36)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O039",
+                "subject": {"reference": "Patient/P004"},
+                "code": {"coding": [{"display": "Creatinine"}]},
+                "valueQuantity": {"value": 2.1, "unit": "mg/dL"},
+                "effectiveDateTime": (now - timedelta(hours=18)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O040",
+                "subject": {"reference": "Patient/P004"},
+                "code": {"coding": [{"display": "Creatinine"}]},
+                "valueQuantity": {"value": 2.4, "unit": "mg/dL"},
+                "effectiveDateTime": (now - timedelta(hours=8)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O041",
+                "subject": {"reference": "Patient/P004"},
+                "code": {"coding": [{"display": "Procalcitonin"}]},
+                "valueQuantity": {"value": 42.8, "unit": "ng/mL"},
+                "effectiveDateTime": (now - timedelta(hours=36)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O042",
+                "subject": {"reference": "Patient/P004"},
+                "code": {"coding": [{"display": "Blood Culture Result"}]},
+                "valueQuantity": {"value": "Gram-negative bacteremia — E. coli, susceptibilities pending", "unit": "text"},
+                "effectiveDateTime": (now - timedelta(hours=14)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O043",
+                "subject": {"reference": "Patient/P004"},
+                "code": {"coding": [{"display": "Urine Output"}]},
+                "valueQuantity": {"value": 22, "unit": "mL/hr"},
+                "effectiveDateTime": (now - timedelta(hours=2)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O044",
+                "subject": {"reference": "Patient/P004"},
+                "code": {"coding": [{"display": "Mean Arterial Pressure"}]},
+                "valueQuantity": {"value": 68, "unit": "mmHg"},
+                "effectiveDateTime": (now - timedelta(hours=2)).isoformat(),
+            },
         ]
         # Active orders for P004 — NOTE: no VTE prophylaxis order (safety alert trigger)
         self.active_orders["P004"] = [
@@ -474,6 +549,34 @@ class MockFHIRServer:
                 "type": "lab",
                 "name": "Basic metabolic panel Q8h",
                 "ordered_at": admission_p004,
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P004-006",
+                "type": "lab",
+                "name": "Blood culture susceptibility follow-up (stat)",
+                "ordered_at": (now - timedelta(hours=14)).isoformat(),
+                "status": "active",
+            },
+            {
+                "order_id": "ORD-P004-007",
+                "type": "consult",
+                "name": "Infectious Disease consult — gram-negative bacteremia, AKI",
+                "ordered_at": (now - timedelta(hours=12)).isoformat(),
+                "status": "pending",
+            },
+            {
+                "order_id": "ORD-P004-008",
+                "type": "imaging",
+                "name": "Renal ultrasound — new AKI stage 2 workup",
+                "ordered_at": (now - timedelta(hours=8)).isoformat(),
+                "status": "pending",
+            },
+            {
+                "order_id": "ORD-P004-009",
+                "type": "lab",
+                "name": "Repeat BMP in 4 hours",
+                "ordered_at": (now - timedelta(hours=2)).isoformat(),
                 "status": "active",
             },
             # No VTE prophylaxis order — intentional for safety alert demo
@@ -518,6 +621,7 @@ class MockFHIRServer:
             "bed": "CARD-12",
             "code_status": "DNR/DNI",
             "attending": "Dr. Michael Jones",
+            "hospital_id": "COMMUNITY",
         }
         self.conditions["P005"] = [
             {
@@ -637,6 +741,70 @@ class MockFHIRServer:
                 "valueQuantity": {"value": 1.6, "unit": "mg/dL"},
                 "effectiveDateTime": (now - timedelta(hours=8)).isoformat(),
             },
+            # Trending labs — admission through current, for AI trajectory reasoning
+            {
+                "resourceType": "Observation", "id": "O046",
+                "subject": {"reference": "Patient/P005"},
+                "code": {"coding": [{"display": "Creatinine"}]},
+                "valueQuantity": {"value": 1.4, "unit": "mg/dL"},
+                "effectiveDateTime": (now - timedelta(days=4)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O047",
+                "subject": {"reference": "Patient/P005"},
+                "code": {"coding": [{"display": "Creatinine"}]},
+                "valueQuantity": {"value": 1.5, "unit": "mg/dL"},
+                "effectiveDateTime": (now - timedelta(days=3)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O048",
+                "subject": {"reference": "Patient/P005"},
+                "code": {"coding": [{"display": "Creatinine"}]},
+                "valueQuantity": {"value": 1.6, "unit": "mg/dL"},
+                "effectiveDateTime": (now - timedelta(days=2)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O049",
+                "subject": {"reference": "Patient/P005"},
+                "code": {"coding": [{"display": "Creatinine"}]},
+                "valueQuantity": {"value": 1.7, "unit": "mg/dL"},
+                "effectiveDateTime": (now - timedelta(hours=8)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O050",
+                "subject": {"reference": "Patient/P005"},
+                "code": {"coding": [{"display": "eGFR"}]},
+                "valueQuantity": {"value": 35, "unit": "mL/min"},
+                "effectiveDateTime": (now - timedelta(hours=8)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O051",
+                "subject": {"reference": "Patient/P005"},
+                "code": {"coding": [{"display": "BNP"}]},
+                "valueQuantity": {"value": 2100, "unit": "pg/mL"},
+                "effectiveDateTime": (now - timedelta(days=4)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O052",
+                "subject": {"reference": "Patient/P005"},
+                "code": {"coding": [{"display": "BNP"}]},
+                "valueQuantity": {"value": 1250, "unit": "pg/mL"},
+                "effectiveDateTime": (now - timedelta(days=2)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O053",
+                "subject": {"reference": "Patient/P005"},
+                "code": {"coding": [{"display": "Weight"}]},
+                "valueQuantity": {"value": 78.8, "unit": "kg"},
+                "effectiveDateTime": (now - timedelta(days=4)).isoformat(),
+            },
+            {
+                "resourceType": "Observation", "id": "O054",
+                "subject": {"reference": "Patient/P005"},
+                "code": {"coding": [{"display": "Weight"}]},
+                "valueQuantity": {"value": 74.8, "unit": "kg"},
+                "effectiveDateTime": (now - timedelta(days=2)).isoformat(),
+            },
         ]
         self.active_orders["P005"] = [
             {
@@ -687,6 +855,14 @@ class MockFHIRServer:
                 "name": "Cardiology follow-up within 7 days post-discharge",
                 "ordered_at": (now - timedelta(days=1)).isoformat(),
                 "status": "pending",
+            },
+            {
+                "order_id": "ORD-P005-008",
+                "type": "device",
+                "name": "Foley catheter",
+                "ordered_at": admission_p005,
+                "inserted_at": admission_p005,
+                "status": "active",
             },
         ]
         self.progress_notes["P005"] = [
@@ -754,6 +930,7 @@ class MockFHIRServer:
                 "gender": patient.get("gender", "unknown"),
                 "location": patient.get("address", [{}])[0].get("city", "Unknown"),
                 "encounter_type": patient.get("encounter_type", "outpatient"),
+                "hospital_id": patient.get("hospital_id", "GENERAL"),
             },
             "conditions": [
                 {

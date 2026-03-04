@@ -5,6 +5,8 @@ Structures clinical encounter data into standard SOAP format with:
 - Confidence scores for diagnoses
 - Drug interaction alerts
 - Evidence citations
+- Negation-aware symptom extraction (NegEx)
+- Temporal context tagging (D+N markers)
 """
 
 import re
@@ -23,6 +25,22 @@ try:
 except ImportError:
     # Fallback if module not available
     get_clinical_intelligence = None
+
+# Import negation detector and temporal tagger (graceful degradation)
+try:
+    from src.clinical.negation import get_negation_detector, AssertionStatus
+    _NEGATION_AVAILABLE = True
+except ImportError:
+    _NEGATION_AVAILABLE = False
+    get_negation_detector = None
+    AssertionStatus = None
+
+try:
+    from src.clinical.temporal import get_temporal_tagger
+    _TEMPORAL_AVAILABLE = True
+except ImportError:
+    _TEMPORAL_AVAILABLE = False
+    get_temporal_tagger = None
 
 
 @dataclass
@@ -313,12 +331,26 @@ class SOAPGenerator:
     """
     Enhanced SOAP note generator with clinical decision support.
     """
-    
+
     def __init__(self):
         self.clinical_intel = None
         if get_clinical_intelligence:
             try:
                 self.clinical_intel = get_clinical_intelligence()
+            except Exception:
+                pass
+
+        self.negation_detector = None
+        if _NEGATION_AVAILABLE and get_negation_detector:
+            try:
+                self.negation_detector = get_negation_detector()
+            except Exception:
+                pass
+
+        self.temporal_tagger = None
+        if _TEMPORAL_AVAILABLE and get_temporal_tagger:
+            try:
+                self.temporal_tagger = get_temporal_tagger()
             except Exception:
                 pass
     
@@ -327,20 +359,38 @@ class SOAPGenerator:
         transcription: str,
         patient_context: dict | None = None,
         image_findings: str | None = None,
-        raw_soap_text: str | None = None
+        raw_soap_text: str | None = None,
+        admission_date: datetime | None = None,
     ) -> EnhancedSOAPNote:
         """
         Generate an enhanced SOAP note with all clinical intelligence features.
-        
+
         Args:
-            transcription: Clinical encounter transcription
+            transcription:  Clinical encounter transcription
             patient_context: EHR patient data
             image_findings: Medical image analysis results
-            raw_soap_text: Optional raw SOAP text from MedGemma
-            
+            raw_soap_text:  Optional raw SOAP text from MedGemma
+            admission_date: Patient admission date for temporal tagging (optional)
+
         Returns:
             EnhancedSOAPNote with all features populated
         """
+        # ── Temporal enrichment ───────────────────────────────────────────────
+        # Tag transcription with [D+N] markers before any downstream processing
+        # so the LLM sees events on a timeline.
+        enriched_transcription = transcription
+        if self.temporal_tagger and transcription:
+            try:
+                if admission_date:
+                    enriched_transcription = self.temporal_tagger.inject_los_context(
+                        transcription, admission_date
+                    )
+                else:
+                    tag_result = self.temporal_tagger.tag(transcription)
+                    enriched_transcription = tag_result.tagged_text
+            except Exception:
+                pass  # Degrade gracefully — use original transcription
+        # ── Base SOAP structure ───────────────────────────────────────────────
         # Parse base SOAP if provided
         if raw_soap_text:
             base_soap = self.parse_from_text(raw_soap_text)
@@ -367,8 +417,8 @@ class SOAPGenerator:
             # Ensure patient_context is a proper dict before passing it down
             pc = patient_context if isinstance(patient_context, dict) else None
 
-            # Extract symptoms from transcription for differential
-            symptoms = self._extract_symptoms(transcription)
+            # Extract symptoms from enriched transcription for differential
+            symptoms = self._extract_symptoms(enriched_transcription)
 
             # Generate differential diagnoses with confidence
             differentials = self.clinical_intel.generate_differential_with_confidence(
@@ -407,7 +457,13 @@ class SOAPGenerator:
         return enhanced
     
     def _extract_symptoms(self, transcription: str) -> list[str]:
-        """Extract symptom keywords from transcription."""
+        """
+        Extract symptom keywords from transcription, filtered through NegEx negation
+        detection to avoid including denied, historical, or uncertain symptoms.
+
+        Uses "any affirmed → keep" safety policy: a symptom mentioned in both an
+        affirmed and historical context is retained (clinically safer than dropping it).
+        """
         symptom_keywords = [
             "cough", "dyspnea", "shortness of breath", "wheezing", "chest pain",
             "fever", "chills", "fatigue", "weakness", "weight loss", "weight gain",
@@ -415,14 +471,30 @@ class SOAPGenerator:
             "headache", "dizziness", "syncope", "palpitations", "edema",
             "pain", "swelling", "rash", "itching", "numbness", "tingling"
         ]
-        
+
         transcription_lower = transcription.lower()
-        found_symptoms = []
-        
-        for symptom in symptom_keywords:
-            if symptom in transcription_lower:
-                found_symptoms.append(symptom)
-        
+        found_symptoms = [
+            symptom for symptom in symptom_keywords
+            if symptom in transcription_lower
+        ]
+
+        if not found_symptoms:
+            return []
+
+        # Apply negation detection when available.
+        # filter_affirmed keeps symptoms that appear in at least one AFFIRMED sentence.
+        # It conservatively retains a symptom if it isn't found in any sentence at all
+        # (e.g., if the keyword was inside a disrupted temporal tag).
+        if self.negation_detector:
+            try:
+                found_symptoms = self.negation_detector.filter_affirmed(
+                    transcription,
+                    found_symptoms,
+                    keep_uncertain=False,
+                )
+            except Exception:
+                pass  # Degrade gracefully — return unfiltered list
+
         return found_symptoms
     
     def parse_from_text(self, raw_text: str) -> SOAPNote:

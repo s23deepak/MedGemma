@@ -3,6 +3,17 @@
  * Handles patient selection, manual entry, image upload, canvas annotation, and chat.
  */
 
+function mdHtml(t) {
+    if (!t) return '';
+    let h = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    h = h.replace(/^#{1,3} (.+)$/gm,'<strong>$1</strong>');
+    h = h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+    h = h.replace(/\*(.+?)\*/g,'<em>$1</em>');
+    h = h.replace(/^[\*\-] (.+)$/gm,'• $1');
+    h = h.replace(/\n/g,'<br>');
+    return h;
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 const portalState = {
@@ -940,27 +951,27 @@ function renderPubmedContextInline(ctx) {
     let inner = '';
 
     if (ctx.summary) {
-        inner += `<p style="margin:0 0 0.4rem; line-height:1.45; font-size:0.8rem;">${ctx.summary}</p>`;
+        inner += `<p style="margin:0 0 0.4rem; line-height:1.45; font-size:0.8rem;">${mdHtml(ctx.summary)}</p>`;
     }
 
     if (ctx.mode === 'case_matcher' && ctx.rare_diagnoses && ctx.rare_diagnoses.length > 0) {
         inner += `<div style="font-size:0.78rem; font-weight:600; margin-bottom:0.2rem;">Rare diagnoses to consider:</div>
         <ul style="margin:0 0 0.3rem 1.1rem; padding:0; font-size:0.78rem;">`;
-        ctx.rare_diagnoses.slice(0, 4).forEach(d => { inner += `<li>${d}</li>`; });
+        ctx.rare_diagnoses.slice(0, 4).forEach(d => { inner += `<li>${mdHtml(d)}</li>`; });
         inner += `</ul>`;
     }
 
     if (ctx.mode === 'ebm_validator' && ctx.divergences && ctx.divergences.length > 0) {
         inner += `<div style="font-size:0.78rem; font-weight:600; color:#b45309; margin-bottom:0.2rem;">Plan divergences:</div>
         <ul style="margin:0 0 0.3rem 1.1rem; padding:0; font-size:0.78rem; color:#92400e;">`;
-        ctx.divergences.slice(0, 3).forEach(d => { inner += `<li>${d}</li>`; });
+        ctx.divergences.slice(0, 3).forEach(d => { inner += `<li>${mdHtml(d)}</li>`; });
         inner += `</ul>`;
     }
 
     if (ctx.mode === 'ddi_monitor' && ctx.ddi_alerts && ctx.ddi_alerts.length > 0) {
         inner += `<div style="font-size:0.78rem; font-weight:600; color:#b91c1c; margin-bottom:0.2rem;">Interaction signals:</div>
         <ul style="margin:0 0 0.3rem 1.1rem; padding:0; font-size:0.78rem; color:#7f1d1d;">`;
-        ctx.ddi_alerts.slice(0, 3).forEach(a => { inner += `<li>${a}</li>`; });
+        ctx.ddi_alerts.slice(0, 3).forEach(a => { inner += `<li>${mdHtml(a)}</li>`; });
         inner += `</ul>`;
     }
 
@@ -970,7 +981,7 @@ function renderPubmedContextInline(ctx) {
             ${ctx.citation_list.length} citation(s)
           </summary>
           <ol style="margin:0.2rem 0 0 1.1rem; padding:0; font-size:0.72rem; opacity:0.8;">`;
-        ctx.citation_list.forEach(c => { inner += `<li style="margin:0.1rem 0;">${c}</li>`; });
+        ctx.citation_list.forEach(c => { inner += `<li style="margin:0.1rem 0;">${mdHtml(c)}</li>`; });
         inner += `</ol></details>`;
     }
 

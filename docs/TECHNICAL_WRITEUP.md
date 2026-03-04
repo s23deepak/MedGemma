@@ -239,6 +239,37 @@ Patient-friendly 5th–6th grade discharge summary with:
 - Medication counselling notes per drug
 - Red flag symptoms for return precautions
 
+### 7.5 LACE Readmission Scoring
+
+Quantitative readmission risk embedded in every discharge summary:
+
+| Component | Scoring |
+|-----------|---------|
+| L — Length of Stay | 0=<1d, 1=1d, 2=2d, 3=3d, 4=4-6d, 5=7-13d, 7=>14d |
+| A — Acuity (emergency admit) | 3 if admitted via ED, else 0 |
+| C — Charlson Comorbidity Index | Weighted keyword match against conditions, capped at 5 |
+| E — ED visits in prior 6 months | 0=none, 1=once, 2=twice, 3=thrice, 4=≥4 |
+
+Score ≥10 → HIGH, 5–9 → MEDIUM, <5 → LOW. Exposed as `lace_score` and `lace_components` in discharge summary response.
+
+### 7.6 Expanded Safety Rules
+
+Four additional safety checks beyond the original four:
+
+| Rule | Severity | Logic |
+|------|----------|-------|
+| Falls Risk (Morse) | CRITICAL / WARNING | Age ≥65, ≥2 fall history, presence of IV line or assistive device |
+| Pressure Ulcer Risk (Braden) | WARNING | Limited mobility + nutritional deficit indicators |
+| Antibiotic De-escalation | WARNING | Broad-spectrum antibiotic (vancomycin, meropenem, piperacillin) active with culture results available |
+| Glycemic Control | WARNING | Insulin active without glucose monitoring observation in last 6h |
+
+### 7.7 Medication Reconciliation
+
+`GET /api/inpatient/{id}/med-reconciliation` returns a `MedReconciliation` object:
+- `added_meds`: Medications in inpatient orders not present at admission
+- `discontinued_meds`: Admission medications not continued as inpatient orders
+- `reconciliation_status`: `"complete"` or `"review_required"` (when discontinuations detected)
+
 ---
 
 ## 8. AI Chat Portal (`/ai-portal`)
@@ -277,7 +308,34 @@ PubMed intent detection: each chat message is analysed for keywords indicating D
 
 ---
 
-## 11. Performance
+## 11. Compliance and Infrastructure
+
+### 11.1 Audit Logging (`src/audit/`)
+
+Every clinical AI action is recorded as an `AuditEvent`:
+- **Storage**: In-memory `deque(maxlen=1000)` ring buffer + fire-and-forget Firestore write
+- **Event types**: `SOAP_GENERATED`, `COUNCIL_DELIBERATION`, `HANDOFF_GENERATED`, `DISCHARGE_PLANNED`
+- **Fields**: `event_id`, `timestamp`, `event_type`, `action`, `user_id`, `user_role`, `patient_id`, `success`
+- **Routes**: `GET /api/audit/recent?limit=N`, `GET /api/audit/patient/{patient_id}`
+
+### 11.2 Performance Profiling (`src/monitoring/`)
+
+`@track_perf("operation_name")` decorator wraps both sync and async route handlers. Stores up to 200 samples per operation in a `deque`; `get_stats()` computes avg/min/max/count. Instrumented operations: `council_deliberation`, `council_iterative`, `rounding`, `handoff`, `discharge_summary`. Exposed via `GET /api/metrics`.
+
+### 11.3 Multi-Hospital Configuration (`src/config/`)
+
+`HospitalRegistry` is a singleton registry loaded on startup, pre-seeded with GENERAL and COMMUNITY demo hospitals and overlaid with Firestore data if available. Supports per-hospital:
+- `formulary_restrictions`: list of medication names requiring alternative confirmation
+- `features_enabled`: audit_log, prior_auth, referral, simulation toggles
+- `contact_info`, `timezone`, `branding`
+
+### 11.4 Prior Authorization + Referral Letters
+
+`PriorAuthService` auto-detects orders requiring prior authorization based on keyword matching against known medication/procedure categories (biologics, specialty imaging, etc.). Workflow: detect → pending → approve/deny. `ReferralLetterService` generates AI-formatted specialist referral letters from encounter context.
+
+---
+
+## 12. Performance
 
 | Backend | First-load | Inference | VRAM |
 |---------|-----------|-----------|------|
@@ -287,7 +345,7 @@ PubMed intent detection: each chat message is analysed for keywords indicating D
 
 ---
 
-## 12. API Reference (Summary)
+## 13. API Reference (Summary)
 
 ### Encounter Workflow
 | Method | Endpoint | Description |
@@ -321,10 +379,37 @@ PubMed intent detection: each chat message is analysed for keywords indicating D
 | POST | `/api/inpatient/{id}/sbar` | SBAR handoff with completeness audit |
 | GET | `/api/inpatient/safety` | Ward safety dashboard |
 | POST | `/api/inpatient/{id}/discharge-summary` | Discharge summary with readmission risk |
+| GET | `/api/inpatient/{id}/med-reconciliation` | Medication reconciliation diff |
+
+### Audit & Metrics
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/audit/recent` | Most recent audit events (limit param) |
+| GET | `/api/audit/patient/{id}` | Audit events for a patient |
+| GET | `/api/metrics` | Latency stats for tracked operations |
+
+### Prior Auth & Referral
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/prior-auth/{patient_id}` | All prior auth requests for patient |
+| POST | `/api/prior-auth/{patient_id}/detect` | Auto-detect orders requiring prior auth |
+| GET | `/api/prior-auth/request/{auth_id}` | Look up request by auth_id |
+| POST | `/api/prior-auth/request/{auth_id}/approve` | Approve a prior auth request |
+| POST | `/api/prior-auth/request/{auth_id}/deny` | Deny a prior auth request |
+| GET | `/api/referral/{patient_id}` | All referral letters for patient |
+| POST | `/api/referral/{patient_id}/generate` | Generate specialist referral letters |
+
+### Hospital Registry
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/hospitals` | List all hospital profiles |
+| GET | `/api/hospitals/{hospital_id}` | Get single hospital |
+| POST | `/api/hospitals` | Register new hospital |
+| GET | `/api/hospitals/{hospital_id}/patients` | Patients assigned to hospital |
 
 ---
 
-## 13. Running the Demo
+## 14. Running the Demo
 
 ```bash
 # No GPU required
@@ -347,7 +432,7 @@ Open http://localhost:8000
 
 ---
 
-## 14. Competition Compliance
+## 15. Competition Compliance
 
 | Requirement | Status |
 |-------------|--------|
@@ -366,16 +451,22 @@ Open http://localhost:8000
 | Iterative evidence feedback | ✅ 2-round Deep Dive with PubMed rare diagnosis injection |
 | Human-in-the-loop approval | ✅ All EHR updates require explicit physician approval |
 | Reproducibility | ✅ Simulated mode + test suite (72 tests, no GPU) |
+| Audit logging | ✅ Immutable AuditEvent trail, ring buffer + Firestore, 4 event types |
+| Prior auth & referral | ✅ Auto-detection, approve/deny workflow, AI referral letters |
+| LACE readmission index | ✅ L+A+C+E scoring with Charlson comorbidity in every discharge summary |
+| Expanded safety rules | ✅ Falls (Morse), pressure ulcer (Braden), antibiotic de-escalation, glycemic control |
+| Medication reconciliation | ✅ Admission vs. inpatient medication diff |
+| Multi-hospital tenancy | ✅ Per-hospital formulary restrictions and feature flags |
+| Performance profiling | ✅ @track_perf decorator, rolling latency stats, GET /api/metrics |
 
 ---
 
-## 15. Future Work
+## 16. Future Work
 
 1. **Production MedASR** — Replace simulated speech recognition with production-grade streaming model
 2. **Real FHIR Integration** — Connect to Epic/Cerner via standard SMART on FHIR flow
 3. **HL7 CDA Export** — Standards-compliant documentation for interoperability
 4. **Multi-GPU Scaling** — vLLM tensor parallelism for concurrent encounters
 5. **Managed Vector Backend** — Optional Qdrant/Pinecone backend replacing the current in-memory TF-IDF for cross-patient semantic retrieval
-6. **Audit Logging** — Immutable compliance trail (all AI suggestions + physician accept/reject decisions)
-7. **PubMed Semantic Search** — Replace keyword-based intent detection with embedding-based dispatch
-8. **Federated Learning** — Privacy-preserving fine-tuning on institution-specific clinical patterns
+6. **PubMed Semantic Search** — Replace keyword-based intent detection with embedding-based dispatch
+7. **Federated Learning** — Privacy-preserving fine-tuning on institution-specific clinical patterns

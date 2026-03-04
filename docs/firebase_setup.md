@@ -107,3 +107,40 @@ system_cache/
     event_categories: {...}
     symptom_synonyms: {...}
 ```
+
+---
+
+## New Firestore Collections (Auto-created)
+
+The following collections are created automatically when Firebase is enabled and the app runs:
+
+```
+audit_log/
+  AUD-{12-char-hex}/        ← one document per audit event
+    event_id: "AUD-abc123..."
+    timestamp: "2026-02-26T10:30:00"
+    event_type: "SOAP_GENERATED"   # or COUNCIL_DELIBERATION / HANDOFF_GENERATED / DISCHARGE_PLANNED
+    action: "generate_soap"
+    patient_id: "P001"
+    user_id: "system"
+    success: true
+
+hospitals/
+  GENERAL/                   ← General Hospital, Chicago (pre-seeded)
+    hospital_id: "GENERAL"
+    name: "General Hospital"
+    timezone: "America/Chicago"
+    formulary_restrictions: []
+    features_enabled: {audit_log: true, prior_auth: true, referral: true, simulation: true}
+    contact_info: {phone: "555-0100", address: "123 Medical Dr, Chicago IL"}
+  COMMUNITY/                 ← Community Medical Center, New York (pre-seeded)
+    hospital_id: "COMMUNITY"
+    formulary_restrictions: ["adalimumab", "pembrolizumab"]
+    features_enabled: {audit_log: true, prior_auth: false, referral: true, simulation: false}
+    ...
+```
+
+All Firestore writes are **fire-and-forget** — a Firestore failure never blocks the clinical workflow. When Firebase is unavailable:
+- Audit events stay in-memory (ring buffer, last 1000 events)
+- Hospital registry stays in-memory (pre-seeded GENERAL + COMMUNITY always available)
+- Prior auth requests and referral letters are not persisted across restarts

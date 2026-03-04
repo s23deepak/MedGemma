@@ -209,6 +209,16 @@
     </main>
 
     <script>
+        function mdHtml(t) {
+            if (!t) return '';
+            let h = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            h = h.replace(/^#{1,3} (.+)$/gm,'<strong>$1</strong>');
+            h = h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+            h = h.replace(/\*(.+?)\*/g,'<em>$1</em>');
+            h = h.replace(/^[\*\-] (.+)$/gm,'• $1');
+            h = h.replace(/\n/g,'<br>');
+            return h;
+        }
         async function runSafetyChecks() {
             const ward = document.getElementById('ward-filter').value;
             const btn = document.getElementById('btn-run');
@@ -336,7 +346,7 @@
                 const match = alerts.find(a => a.alert_id === alertId);
                 const expDiv = document.getElementById('exp-' + alertId);
                 if (match && match.ai_explanation) {
-                    expDiv.textContent = match.ai_explanation;
+                    expDiv.innerHTML = mdHtml(match.ai_explanation);
                     expDiv.classList.add('visible');
                     btn.style.display = 'none';
                 } else {

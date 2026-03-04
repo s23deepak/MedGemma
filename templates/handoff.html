@@ -184,6 +184,16 @@
     </main>
 
     <script>
+        function mdHtml(t) {
+            if (!t) return '';
+            let h = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            h = h.replace(/^#{1,3} (.+)$/gm,'<strong>$1</strong>');
+            h = h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+            h = h.replace(/\*(.+?)\*/g,'<em>$1</em>');
+            h = h.replace(/^[\*\-] (.+)$/gm,'• $1');
+            h = h.replace(/\n/g,'<br>');
+            return h;
+        }
         async function loadPatients() {
             const sel = document.getElementById('patient-select');
             try {
@@ -263,7 +273,7 @@
             document.getElementById('sbar-grid').innerHTML = sections.map(s =>
                 `<div class="sbar-section ${s.cls}">
                     <div class="sbar-label">${s.label}</div>
-                    <div class="sbar-content">${escapeHtml(sbar[s.key] || 'No data.')}</div>
+                    <div class="sbar-content">${mdHtml(sbar[s.key] || 'No data.')}</div>
                 </div>`
             ).join('');
         }

@@ -302,6 +302,14 @@ class PriorAuthService:
                 return req
         return None
 
+    def find_by_auth_id(self, auth_id: str) -> dict | None:
+        """Look up a prior auth request by auth_id across all patients."""
+        for reqs in self.fhir.prior_auths.values():
+            for req in reqs:
+                if req.get("auth_id") == auth_id:
+                    return req
+        return None
+
     # ── Narrative generation ──────────────────────────────────────────────────
 
     def generate_narrative(

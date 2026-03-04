@@ -3,6 +3,17 @@
  * Handles patient selection, audio recording, image upload, and SOAP workflow
  */
 
+function mdHtml(t) {
+    if (!t) return '';
+    let h = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    h = h.replace(/^#{1,3} (.+)$/gm,'<strong>$1</strong>');
+    h = h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+    h = h.replace(/\*(.+?)\*/g,'<em>$1</em>');
+    h = h.replace(/^[\*\-] (.+)$/gm,'• $1');
+    h = h.replace(/\n/g,'<br>');
+    return h;
+}
+
 // Application State
 const state = {
     sessionId: null,
@@ -740,14 +751,14 @@ function renderPubmedInsights(results) {
         html += `<div style="font-weight:600; margin-bottom:0.5rem;">${meta.icon} ${meta.title}</div>`;
 
         if (result.summary) {
-            html += `<p style="color:var(--text-secondary); margin-bottom:0.5rem; line-height:1.5;">${result.summary}</p>`;
+            html += `<p style="color:var(--text-secondary); margin-bottom:0.5rem; line-height:1.5;">${mdHtml(result.summary)}</p>`;
         }
 
         // Mode-specific lists
         if (mode === 'case_matcher' && result.rare_diagnoses && result.rare_diagnoses.length > 0) {
             html += `<div style="font-weight:500; margin-bottom:0.25rem;">Rare Diagnoses to Consider:</div><ul style="margin:0 0 0.5rem 1.2rem; padding:0;">`;
             result.rare_diagnoses.slice(0, 5).forEach(d => {
-                html += `<li style="margin:0.15rem 0;">${d}</li>`;
+                html += `<li style="margin:0.15rem 0;">${mdHtml(d)}</li>`;
             });
             html += `</ul>`;
         }
@@ -755,7 +766,7 @@ function renderPubmedInsights(results) {
         if (mode === 'ebm_validator' && result.divergences && result.divergences.length > 0) {
             html += `<div style="font-weight:500; color:#b45309; margin-bottom:0.25rem;">Plan Divergences from Evidence:</div><ul style="margin:0 0 0.5rem 1.2rem; padding:0; color:#92400e;">`;
             result.divergences.slice(0, 4).forEach(d => {
-                html += `<li style="margin:0.15rem 0; font-size:0.82rem;">${d}</li>`;
+                html += `<li style="margin:0.15rem 0; font-size:0.82rem;">${mdHtml(d)}</li>`;
             });
             html += `</ul>`;
         }
@@ -763,7 +774,7 @@ function renderPubmedInsights(results) {
         if (mode === 'ddi_monitor' && result.ddi_alerts && result.ddi_alerts.length > 0) {
             html += `<div style="font-weight:500; color:#b91c1c; margin-bottom:0.25rem;">Interaction Signals:</div><ul style="margin:0 0 0.5rem 1.2rem; padding:0; color:#7f1d1d;">`;
             result.ddi_alerts.slice(0, 4).forEach(a => {
-                html += `<li style="margin:0.15rem 0; font-size:0.82rem;">${a}</li>`;
+                html += `<li style="margin:0.15rem 0; font-size:0.82rem;">${mdHtml(a)}</li>`;
             });
             html += `</ul>`;
         }
@@ -772,7 +783,7 @@ function renderPubmedInsights(results) {
         if (result.key_findings && result.key_findings.length > 0) {
             html += `<details style="margin-top:0.35rem;"><summary style="cursor:pointer; font-size:0.8rem; color:var(--text-secondary);">Key findings (${result.key_findings.length})</summary><ul style="margin:0.25rem 0 0 1.2rem; padding:0;">`;
             result.key_findings.forEach(f => {
-                html += `<li style="margin:0.2rem 0; font-size:0.78rem; color:var(--text-secondary);">${f}</li>`;
+                html += `<li style="margin:0.2rem 0; font-size:0.78rem; color:var(--text-secondary);">${mdHtml(f)}</li>`;
             });
             html += `</ul></details>`;
         }
@@ -781,7 +792,7 @@ function renderPubmedInsights(results) {
         if (result.citation_list && result.citation_list.length > 0) {
             html += `<details style="margin-top:0.25rem;"><summary style="cursor:pointer; font-size:0.8rem; color:var(--text-secondary);">Citations (${result.citation_list.length})</summary><ol style="margin:0.25rem 0 0 1.2rem; padding:0;">`;
             result.citation_list.forEach(c => {
-                html += `<li style="margin:0.2rem 0; font-size:0.75rem; color:var(--text-secondary);">${c}</li>`;
+                html += `<li style="margin:0.2rem 0; font-size:0.75rem; color:var(--text-secondary);">${mdHtml(c)}</li>`;
             });
             html += `</ol></details>`;
         }

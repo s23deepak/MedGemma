@@ -251,9 +251,16 @@ class SBARHandoffService:
             f"Be specific and actionable. Include allergy and code status explicitly."
         )
         try:
-            result = agent.process_query(prompt)
-            response = result.get("response", "")
+            response = agent.chat(prompt)
             sbar = self._parse_sbar_sections(response)
+            # If situation wasn't parsed, build it from context so it's never blank
+            if not sbar.get("situation"):
+                primary_dx = ctx["conditions"][0]["name"] if ctx["conditions"] else "Unknown"
+                sbar["situation"] = (
+                    f"{pt['name']}, {pt.get('age', '?')}y {pt.get('gender', '')} — "
+                    f"{pt.get('ward')} Bed {pt.get('bed')}, LOS {los_days:.1f} days. "
+                    f"Admitted for {primary_dx}."
+                )
             sbar["_source"] = "medgemma"
             return sbar
         except Exception as e:
@@ -280,11 +287,13 @@ class SBARHandoffService:
         }
         for line in text.splitlines():
             line_lower = line.lower().strip()
+            # Strip markdown formatting chars so "**SITUATION:**" matches "situation"
+            cleaned = line_lower.lstrip("*#_>~ ").strip()
             matched = False
             for keyword, key in key_map.items():
-                if line_lower.startswith(keyword):
+                if cleaned.startswith(keyword):
                     current = key
-                    remainder = line.split(":", 1)[-1].strip()
+                    remainder = line.split(":", 1)[-1].strip().lstrip("*_ ").strip()
                     sections[current] = remainder + "\n" if remainder else ""
                     matched = True
                     break

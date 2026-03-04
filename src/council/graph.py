@@ -37,7 +37,7 @@ from .council import (
     _get_diagnoses,
     _synth_discussion,
 )
-from .rag import compress_note
+from .rag import compress_note, compress_note_negation_aware
 
 
 # ── State schema ──────────────────────────────────────────────────────────────
@@ -62,6 +62,7 @@ class CouncilState(TypedDict):
     consensus_strength: str
     consensus_confidence: float
     discussion_summary: str
+    minority_challenge: str          # counter-factual prompt from dissenting opinions
 
     # ── PubMed results ────────────────────────────────────────────────────────
     pubmed_insights: dict
@@ -156,7 +157,7 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
         if not raw_note or not raw_note.strip():
             return {"retrieved_context": ""}
         symptoms: list[str] = state["case_info"].get("symptoms", [])
-        context = compress_note(raw_note, symptoms, top_k=5)
+        context = compress_note_negation_aware(raw_note, symptoms, top_k=5)
         return {"retrieved_context": context}
 
     def _opinion_node(state: CouncilState) -> dict:
@@ -237,6 +238,11 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
                     f"than the most common alternative."
                 )
 
+            # Inject Round-1 minority challenge for Round-2 counter-factual reasoning
+            minority_challenge = state.get("minority_challenge", "")
+            if round_num == 2 and minority_challenge:
+                prompt += f"\n\n{minority_challenge}"
+
             try:
                 if hasattr(agent, "process_query"):
                     result = agent.process_query(query=prompt, patient_context=None)
@@ -247,6 +253,11 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
                 json_match = re.search(r"```(?:json)?(.*?)```", response_text, re.DOTALL)
                 if json_match:
                     response_text = json_match.group(1)
+                else:
+                    # Fallback: extract bare JSON object when MedGemma prefixes text
+                    bare_match = re.search(r"\{[\s\S]*\}", response_text)
+                    if bare_match:
+                        response_text = bare_match.group(0)
                 response_text = (
                     response_text.replace("[Simulated] Processed query: ", "").strip()
                 )
@@ -303,11 +314,46 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
         ]
         diag, strength, conf = _calc_consensus(opinions)
         discussion = _synth_discussion(opinions, diag or "")
+
+        # ── Counter-factual minority challenge ────────────────────────────────
+        # Identify opinions that disagree with the consensus.  Their diagnoses
+        # become the basis of a "Differential Prompting" challenge: if the
+        # consensus is WRONG, what would explain the outlier findings?
+        minority_challenge = ""
+        if diag and opinions:
+            minority_opinions = [
+                o for o in opinions
+                if o.diagnosis.lower() != diag.lower()
+            ]
+            if minority_opinions:
+                minority_dx = list({o.diagnosis for o in minority_opinions})
+                minority_reasoning = [
+                    o.reasoning for o in minority_opinions if o.reasoning
+                ][:3]
+                challenge_lines = [
+                    f"Counter-factual challenge: If the diagnosis is NOT '{diag}', "
+                    f"consider these alternative diagnoses raised by dissenting council members:"
+                ]
+                for dx in minority_dx[:4]:
+                    challenge_lines.append(f"  • {dx}")
+                if minority_reasoning:
+                    challenge_lines.append(
+                        "Supporting reasoning from minority opinions:"
+                    )
+                    for r in minority_reasoning:
+                        challenge_lines.append(f"  — {r}")
+                challenge_lines.append(
+                    f"What specific 'outlier' findings from the clinical note would "
+                    f"need to be present to favour one of these alternatives over '{diag}'?"
+                )
+                minority_challenge = "\n".join(challenge_lines)
+
         return {
             "consensus_diagnosis": diag,
             "consensus_strength": strength.value,
             "consensus_confidence": conf,
             "discussion_summary": discussion,
+            "minority_challenge": minority_challenge,
         }
 
     def run_pubmed(state: CouncilState) -> dict:
@@ -316,10 +362,19 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
             return {"pubmed_insights": {}, "rare_diagnoses": []}
 
         symptoms: list[str] = state["case_info"].get("symptoms", [])
+
+        # Shorten verbose phrases like "recurrent severe unilateral headache" → "headache"
+        # so PubMed queries match article titles/abstracts (≤2 words stay as-is)
+        def _shorten(s: str) -> str:
+            words = s.strip().split()
+            return words[-1] if len(words) > 2 else s
+
+        short_symptoms = [_shorten(s) for s in symptoms]
+
         try:
             pm = pubmed_agent.case_matcher(
-                common_symptoms=symptoms[:3],
-                atypical_markers=symptoms[3:],
+                common_symptoms=short_symptoms[:3],
+                atypical_markers=short_symptoms[3:],
                 max_results=4,
             )
             return {

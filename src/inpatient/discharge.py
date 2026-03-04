@@ -14,6 +14,7 @@ surfaced to UI so physician cannot sign an incomplete discharge document.
 from __future__ import annotations
 
 import logging
+import re as _re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -62,6 +63,55 @@ DISCHARGE_COUNSELING_MEDS = {
 }
 
 
+# ── Charlson Comorbidity Index weights ────────────────────────────────────────
+# Used by LACE score (C component). Keyword matching against condition names.
+# Final score is capped at 5 per the LACE index definition.
+CHARLSON_WEIGHTS: dict[str, int] = {
+    # Weight 1 — common chronic conditions
+    "myocardial infarction": 1, "ami": 1,
+    "heart failure": 1, "chf": 1, "congestive heart failure": 1,
+    "peripheral vascular": 1,
+    "dementia": 1,
+    "copd": 1, "chronic obstructive pulmonary disease": 1,
+    "connective tissue": 1, "rheumatologic": 1,
+    "peptic ulcer": 1,
+    "mild liver": 1,
+    "diabetes": 1, "diabetic": 1,
+    # Weight 2 — more serious complications
+    "hemiplegia": 2, "hemiparesis": 2,
+    "chronic kidney": 2, "ckd": 2, "renal failure": 2,
+    "moderate liver": 2, "severe liver": 2, "cirrhosis": 2,
+    "diabetes with end organ": 2,
+    "tumor": 2, "lymphoma": 2, "leukemia": 2, "solid tumor": 2,
+    # Weight 6 — severe/terminal conditions
+    "metastatic": 6, "metastasis": 6,
+    "aids": 6,
+}
+
+
+@dataclass
+class MedReconciliation:
+    """Medication reconciliation comparing home medications vs current inpatient orders."""
+    home_medications: list[dict]    # medications from FHIR admission baseline
+    current_medications: list[dict] # active medication orders during admission
+    added_meds: list[dict]          # new medications added during admission
+    discontinued_meds: list[dict]   # home medications not continued
+    changed_meds: list[dict]        # dose/route changed (requires structured data; left empty)
+    unchanged_meds: list[dict]      # continued without change
+    discrepancies: list[dict]       # [{med, type, detail}]
+
+    def to_dict(self) -> dict:
+        return {
+            "home_medications": self.home_medications,
+            "current_medications": self.current_medications,
+            "added_meds": self.added_meds,
+            "discontinued_meds": self.discontinued_meds,
+            "changed_meds": self.changed_meds,
+            "unchanged_meds": self.unchanged_meds,
+            "discrepancies": self.discrepancies,
+        }
+
+
 @dataclass
 class DischargeSummary:
     """Structured patient-facing discharge summary."""
@@ -80,6 +130,10 @@ class DischargeSummary:
     readmission_risk_reasons: list[str]
     readmission_risk_explanation: str
     source: str
+    # LACE index fields (default 0/{} for backwards compat with existing call sites)
+    lace_score: int = 0
+    lace_components: dict = field(default_factory=dict)
+    reconciliation: MedReconciliation | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -98,6 +152,9 @@ class DischargeSummary:
             "readmission_risk_reasons": self.readmission_risk_reasons,
             "readmission_risk_explanation": self.readmission_risk_explanation,
             "source": self.source,
+            "lace_score": self.lace_score,
+            "lace_components": self.lace_components,
+            "reconciliation": self.reconciliation.to_dict() if self.reconciliation else None,
         }
 
 
@@ -139,57 +196,103 @@ class InpatientDischargePlanner:
                 source="error",
             )
 
+        # Medication reconciliation (home vs current orders)
+        reconciliation = self.reconcile_medications(patient_id)
+
         risk, risk_reasons = self.assess_readmission_risk(ctx)
+        lace_score = ctx.get("_lace_score", 0)
+        lace_components = ctx.get("_lace_components", {})
         risk_explanation = ""
         if agent:
             risk_explanation = self._generate_risk_explanation(risk, risk_reasons, ctx, agent)
 
         if agent:
-            return self._call_agent(ctx, risk, risk_reasons, risk_explanation, agent)
-        return self._structured_summary(ctx, risk, risk_reasons, risk_explanation)
+            return self._call_agent(
+                ctx, risk, risk_reasons, risk_explanation, agent,
+                lace_score=lace_score, lace_components=lace_components,
+                reconciliation=reconciliation,
+            )
+        return self._structured_summary(
+            ctx, risk, risk_reasons, risk_explanation,
+            lace_score=lace_score, lace_components=lace_components,
+            reconciliation=reconciliation,
+        )
 
     def assess_readmission_risk(self, ctx: dict) -> tuple[ReadmissionRisk, list[str]]:
         """
-        Rule-based readmission risk binning.
+        LACE-index readmission risk assessment.
 
-        Returns (ReadmissionRisk, list_of_reason_strings).
+        LACE = L (length of stay, 0-7) + A (acuity, 0 or 3) +
+               C (Charlson comorbidity index, 0-5) + E (ED visits, 0-4).
+
+        Thresholds: ≥10 = HIGH, 5-9 = MEDIUM, <5 = LOW.
+        Also builds human-readable reasons for the UI.
         """
-        reasons: list[str] = []
-        conditions_text = " ".join(c["name"].lower() for c in ctx.get("conditions", []))
+        conditions = ctx.get("conditions", [])
+        progress_notes = ctx.get("progress_notes", [])
+        los_hours = ctx.get("los_hours", 0.0)
 
-        # High-risk condition check
+        # Charlson comorbidity index (capped at 5)
+        charlson = self._compute_charlson_score(conditions)
+
+        # Acuity: 3 points if admitted via ED (check patient admission_type or notes)
+        acuity_text = (
+            ctx["patient"].get("admission_type", "")
+            + " ".join(n.get("note_text", "")[:50] for n in progress_notes[:2])
+        ).lower()
+        acuity = 3 if any(kw in acuity_text for kw in ["emergency", "ed admit", "er admit"]) else 0
+
+        # ED visit count proxy (from progress note keywords)
+        ed_visits = sum(
+            1 for n in progress_notes
+            if any(kw in n.get("note_text", "").lower() for kw in ["ed visit", "emergency department visit", "er visit"])
+        )
+
+        lace_score, lace_components = self._compute_lace(los_hours, acuity, charlson, ed_visits)
+
+        # Risk threshold
+        if lace_score >= 10:
+            risk = ReadmissionRisk.HIGH
+        elif lace_score >= 5:
+            risk = ReadmissionRisk.MEDIUM
+        else:
+            risk = ReadmissionRisk.LOW
+
+        # Human-readable reasons (also capture legacy rule matches for completeness)
+        reasons: list[str] = []
+        conditions_text = " ".join(c["name"].lower() for c in conditions)
+
         for cond in HIGH_RISK_CONDITIONS:
             if cond in conditions_text:
                 reasons.append(f"High-risk diagnosis: {cond.title()}")
-
-        # Prior admission in last 30 days (check notes for mentions)
-        notes_text = " ".join(n["note_text"].lower() for n in ctx.get("progress_notes", []))
+        notes_text = " ".join(n.get("note_text", "").lower() for n in progress_notes)
         if any(kw in notes_text for kw in ["prior admission", "readmission", "previously admitted", "re-admitted"]):
             reasons.append("Prior recent admission documented in notes")
-
-        # LOS > 7 days
-        if ctx.get("los_hours", 0) > 168:
-            reasons.append(f"Prolonged LOS ({ctx['los_hours']/24:.1f} days)")
-
-        # Medium-risk condition check
-        medium_reasons: list[str] = []
+        if los_hours > 168:
+            reasons.append(f"Prolonged LOS ({los_hours/24:.1f} days)")
         for cond in MEDIUM_RISK_CONDITIONS:
             if cond in conditions_text:
-                medium_reasons.append(f"Medium-risk diagnosis: {cond.title()}")
-
-        # 5+ active medications (polypharmacy)
+                reasons.append(f"Medium-risk diagnosis: {cond.title()}")
         if len(ctx.get("medications", [])) >= 5:
-            medium_reasons.append(f"Polypharmacy ({len(ctx['medications'])} medications)")
+            reasons.append(f"Polypharmacy ({len(ctx['medications'])} medications)")
+        reasons.append(f"LACE index score: {lace_score} (L={lace_components.get('l',0)}, A={lace_components.get('a',0)}, C={lace_components.get('c',0)}, E={lace_components.get('e',0)})")
 
-        if reasons:
-            return ReadmissionRisk.HIGH, reasons
-        if medium_reasons:
-            return ReadmissionRisk.MEDIUM, medium_reasons
-        return ReadmissionRisk.LOW, ["No high or medium risk factors identified"]
+        if not reasons:
+            reasons = ["No significant risk factors identified"]
+
+        # Stash LACE data in ctx for generate_discharge_summary() to retrieve
+        ctx["_lace_score"] = lace_score
+        ctx["_lace_components"] = lace_components
+
+        return risk, reasons
 
     # ── AI generation ─────────────────────────────────────────────────────────
 
-    def _call_agent(self, ctx, risk, risk_reasons, risk_explanation, agent) -> DischargeSummary:
+    def _call_agent(
+        self, ctx, risk, risk_reasons, risk_explanation, agent,
+        lace_score: int = 0, lace_components: dict | None = None,
+        reconciliation: MedReconciliation | None = None,
+    ) -> DischargeSummary:
         pt = ctx["patient"]
         cond_str = ", ".join(c["name"] for c in ctx["conditions"])
         med_str = "\n".join(f"  - {m['name']} {m['dosage']}" for m in ctx["medications"])
@@ -219,8 +322,7 @@ class InpatientDischargePlanner:
             f"MISSING in capital letters as a placeholder so the physician can fill it in."
         )
         try:
-            result = agent.process_query(prompt)
-            response = result.get("response", "")
+            response = agent.chat(prompt)
             parsed = self._parse_ai_discharge(response)
             missing = [f for f in ["WHY YOU WERE ADMITTED", "WHAT WE DID", "FOLLOW-UP APPOINTMENTS"]
                        if "MISSING" in parsed.get(f.lower().replace(" ", "_"), "")]
@@ -241,12 +343,23 @@ class InpatientDischargePlanner:
                 readmission_risk_reasons=risk_reasons,
                 readmission_risk_explanation=risk_explanation,
                 source="medgemma",
+                lace_score=lace_score,
+                lace_components=lace_components or {},
+                reconciliation=reconciliation,
             )
         except Exception as e:
             logger.warning(f"Agent call failed for discharge summary {pt['id']}: {e}")
-            return self._structured_summary(ctx, risk, risk_reasons, risk_explanation)
+            return self._structured_summary(
+                ctx, risk, risk_reasons, risk_explanation,
+                lace_score=lace_score, lace_components=lace_components or {},
+                reconciliation=reconciliation,
+            )
 
-    def _structured_summary(self, ctx, risk, risk_reasons, risk_explanation) -> DischargeSummary:
+    def _structured_summary(
+        self, ctx, risk, risk_reasons, risk_explanation,
+        lace_score: int = 0, lace_components: dict | None = None,
+        reconciliation: MedReconciliation | None = None,
+    ) -> DischargeSummary:
         """Build a structured discharge summary without AI."""
         pt = ctx["patient"]
         conditions = ctx["conditions"]
@@ -307,6 +420,9 @@ class InpatientDischargePlanner:
             readmission_risk_reasons=risk_reasons,
             readmission_risk_explanation=risk_explanation,
             source="structured_fallback",
+            lace_score=lace_score,
+            lace_components=lace_components or {},
+            reconciliation=reconciliation,
         )
 
     def _generate_risk_explanation(self, risk, reasons, ctx, agent) -> str:
@@ -322,13 +438,106 @@ class InpatientDischargePlanner:
             f"and what they can do to reduce that risk at home."
         )
         try:
-            result = agent.process_query(prompt)
-            return result.get("response", "")
+            return agent.chat(prompt)
         except Exception as e:
             logger.warning(f"Risk explanation failed: {e}")
             return ""
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _compute_charlson_score(self, conditions: list[dict]) -> int:
+        """
+        Compute a proxy Charlson Comorbidity Index score from condition names.
+
+        Returns an integer in [0, 5] — capped per the LACE index C component.
+        """
+        joined = " ".join(c.get("name", "").lower() for c in conditions)
+        score = 0
+        seen: set[int] = set()
+        for keyword, weight in CHARLSON_WEIGHTS.items():
+            if keyword in joined and weight not in seen:
+                score += weight
+                seen.add(weight)
+        return min(score, 5)
+
+    def _compute_lace(
+        self, los_hours: float, acuity: int, charlson: int, ed_visits: int
+    ) -> tuple[int, dict]:
+        """
+        Compute LACE index score.
+
+        L = Length of stay (days, capped at 7)
+        A = Acuity (0 or 3; 3 if admitted via emergency department)
+        C = Charlson comorbidity index (0-5)
+        E = ED visits in last 6 months (0-4)
+
+        Returns (total_score, {l, a, c, e, total}).
+        """
+        l_score = min(int(los_hours / 24), 7)
+        a_score = acuity  # already 0 or 3
+        c_score = charlson  # already 0-5
+        e_score = min(ed_visits, 4)
+        total = l_score + a_score + c_score + e_score
+        return total, {"l": l_score, "a": a_score, "c": c_score, "e": e_score, "total": total}
+
+    def reconcile_medications(self, patient_id: str) -> MedReconciliation:
+        """
+        Compare admission baseline medications against current active medication orders
+        to identify new additions and discontinued drugs.
+
+        Returns a MedReconciliation dataclass.
+        """
+        ctx = self._build_context(patient_id)
+        if not ctx:
+            return MedReconciliation([], [], [], [], [], [], [])
+
+        home_meds: list[dict] = ctx.get("medications", [])
+        # Filter active_orders to medication type only
+        current_orders: list[dict] = [
+            o for o in ctx.get("active_orders", [])
+            if o.get("type", "").lower() == "medication"
+        ]
+
+        def _normalize(name: str) -> str:
+            """Strip dose/route suffixes and lowercase for fuzzy matching."""
+            s = name.lower()
+            s = _re.sub(r"\s*\d+\.?\d*\s*(mg|mcg|ml|iu|g|units?)\b", "", s)
+            s = _re.sub(
+                r"\b(oral|iv|sq|im|inhaled|inhaler|patch|tablet|capsule"
+                r"|drops?|cream|gel|spray|solution|suspension)\b", "", s
+            )
+            return s.strip()
+
+        home_map: dict[str, dict] = {_normalize(m["name"]): m for m in home_meds}
+        current_map: dict[str, dict] = {_normalize(o["name"]): o for o in current_orders}
+
+        added = [v for k, v in current_map.items() if k not in home_map]
+        discontinued = [v for k, v in home_map.items() if k not in current_map]
+        unchanged = [v for k, v in home_map.items() if k in current_map]
+
+        discrepancies: list[dict] = []
+        for med in discontinued:
+            discrepancies.append({
+                "med": med.get("name", ""),
+                "type": "discontinued",
+                "detail": "Medication present on admission but not in current orders",
+            })
+        for med in added:
+            discrepancies.append({
+                "med": med.get("name", ""),
+                "type": "new_addition",
+                "detail": "Medication added during admission",
+            })
+
+        return MedReconciliation(
+            home_medications=home_meds,
+            current_medications=current_orders,
+            added_meds=added,
+            discontinued_meds=discontinued,
+            changed_meds=[],  # requires structured dosage comparison; left for future work
+            unchanged_meds=unchanged,
+            discrepancies=discrepancies,
+        )
 
     def _build_context(self, patient_id: str, soap_note: str = "") -> dict:
         summary = self.fhir.get_patient_summary(patient_id)

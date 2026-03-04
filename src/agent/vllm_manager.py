@@ -41,15 +41,29 @@ class VLLMModelManager:
     - MedASR (HuggingFace Transformers) uses .to("cpu") / .to("cuda") offloading.
     - Only one model is resident in GPU memory at any time.
     - An asyncio.Lock serialises concurrent wake/sleep transitions.
+
+    Memory guide (single 8 GB GPU):
+      Weights:   MedGemma 4B @ 4-bit ≈ 3.5 GB (quantization="bitsandbytes")
+      Profiling: encoder forward pass for max_num_batched_tokens / 256 images
+                   8192 (default) → 32 images → ~3.4 GB  ← OOM
+                   1024 (tuned)   →  4 images → ~0.4 GB  ← fits
+      KV cache:  ~0.6 GB available at max_num_batched_tokens=1024
+      Vision:    enable_vision=True works at max_num_batched_tokens=1024
+                 enable_vision=False skips encoder entirely (no profiling at all)
     """
 
     MEDGEMMA_ID = "google/medgemma-1.5-4b-it"
-    FUNCTIONGEMMA_ID = "google/functiongemma-3-270m"
+    FUNCTIONGEMMA_ID = "google/functiongemma-270m-it"
 
     def __init__(
         self,
         gpu_memory_utilization: float = 0.85,
-        max_model_len: int = 8192,
+        max_model_len: int = 4096,
+        max_num_batched_tokens: int = 1024,
+        quantization: str | None = "bitsandbytes",
+        enforce_eager: bool = True,
+        enable_vision: bool = True,
+        load_functiongemma: bool = True,
         load_medasr: bool = True,
     ):
         if not VLLM_AVAILABLE:
@@ -57,6 +71,10 @@ class VLLMModelManager:
 
         self.gpu_memory_utilization = gpu_memory_utilization
         self.max_model_len = max_model_len
+        self.max_num_batched_tokens = max_num_batched_tokens
+        self.quantization = quantization
+        self.enforce_eager = enforce_eager
+        self.enable_vision = enable_vision
 
         self._vllm_engines: dict[str, LLM] = {}
         self._medasr = None
@@ -67,7 +85,8 @@ class VLLMModelManager:
         # Load models sequentially. Each sleeps immediately after init so that
         # the next model can use the freed GPU memory.
         self._init_medgemma()
-        self._init_functiongemma()
+        if load_functiongemma:
+            self._init_functiongemma()
         if load_medasr:
             self._init_medasr()
 
@@ -75,12 +94,23 @@ class VLLMModelManager:
 
     def _init_medgemma(self):
         logger.info(f"Loading MedGemma ({self.MEDGEMMA_ID}) into vLLM…")
+        # Encoder profiling images = max_num_batched_tokens / tokens_per_image (256).
+        # Default 8192 → 32 images → ~3.4 GB activation OOM on 8 GB GPU.
+        # Setting max_num_batched_tokens=1024 → 4 images → ~0.4 GB → fits with 0.6 GB KV cache left.
+        # limit_mm_per_prompt={"image": 0} skips encoder entirely (no vision) — fallback if 1024 still OOMs.
+        mm_limit = {"image": 1} if self.enable_vision else {"image": 0}
+        if not self.enable_vision:
+            logger.info("Vision encoder disabled (enable_vision=False). Image inputs will use text-only path.")
         engine = LLM(
             model=self.MEDGEMMA_ID,
             gpu_memory_utilization=self.gpu_memory_utilization,
             max_model_len=self.max_model_len,
+            max_num_batched_tokens=self.max_num_batched_tokens,
             trust_remote_code=True,
-            limit_mm_per_prompt={"image": 1},
+            enforce_eager=self.enforce_eager,
+            quantization=self.quantization,
+            limit_mm_per_prompt=mm_limit,
+            dtype="bfloat16",
         )
         engine.sleep(level=2)
         self._vllm_engines["medgemma"] = engine
@@ -94,6 +124,8 @@ class VLLMModelManager:
             gpu_memory_utilization=0.30,  # 270M needs much less headroom
             max_model_len=2048,
             trust_remote_code=True,
+            enforce_eager=self.enforce_eager,
+            dtype="bfloat16",
         )
         engine.sleep(level=2)
         self._vllm_engines["functiongemma"] = engine
@@ -163,7 +195,11 @@ class VLLMModelManager:
         max_tokens: int = 2048,
         stop: list[str] | None = None,
     ) -> str:
-        """Generate text with MedGemma (wakes up, then remains active)."""
+        """Generate text with MedGemma (wakes up, then remains active).
+
+        When enable_vision=False (default on 8 GB GPUs), image inputs are
+        silently dropped and only the text prompt is submitted to vLLM.
+        """
         self._ensure_awake("medgemma")
 
         sampling_params = SamplingParams(
@@ -173,9 +209,14 @@ class VLLMModelManager:
             stop=stop or ["<|end|>", "<|eot_id|>"],
         )
 
-        if image is not None:
+        if image is not None and self.enable_vision:
             input_data = [{"prompt": prompt, "multi_modal_data": {"image": image}}]
         else:
+            if image is not None and not self.enable_vision:
+                logger.warning(
+                    "Image passed to generate_medgemma() but enable_vision=False. "
+                    "Processing as text-only prompt."
+                )
             input_data = [prompt]
 
         outputs = self._vllm_engines["medgemma"].generate(input_data, sampling_params)
@@ -200,6 +241,30 @@ class VLLMModelManager:
 
         outputs = self._vllm_engines["functiongemma"].generate([prompt], sampling_params)
         return outputs[0].outputs[0].text.strip()
+
+    def chat(self, message: str, history: list[dict] | None = None) -> str:
+        """
+        Simple chat interface compatible with MedGemmaAgent.chat().
+        Used by the Diagnostic Council and other text-only callers.
+        """
+        system_prompt = (
+            "You are a clinical decision support assistant powered by MedGemma. "
+            "Assist physicians with diagnosis, documentation, and clinical reasoning. "
+            "Always present findings as suggestions, not definitive diagnoses."
+        )
+        conversation = system_prompt + "\n\n"
+        if history:
+            for msg in history:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                conversation += f"{'User' if role == 'user' else 'Assistant'}: {content}\n"
+        conversation += f"User: {message}\nAssistant:"
+        return self.generate_medgemma(
+            prompt=conversation,
+            temperature=0.4,
+            max_tokens=1536,
+            stop=["User:", "<|end|>", "<|eot_id|>"],
+        )
 
     def get_medasr(self):
         """Return the MedASR instance, woken up and ready."""
@@ -235,6 +300,7 @@ class VLLMModelManager:
         """Return current status of all managed models."""
         return {
             "active": self._active,
+            "vision_enabled": self.enable_vision,
             "models": {
                 k: {"status": v} for k, v in self._status.items()
             },
@@ -254,6 +320,10 @@ class VLLMModelManager:
         """
         Analyze a medical image with MedGemma.
         API-compatible with MedGemmaVLLMAgent.analyze_image().
+
+        When enable_vision=False (default on 8 GB GPUs), the image file is not
+        passed to the model; instead a clinical-context-only differential is
+        generated from the text inputs.
         """
         from PIL import Image as PILImage
 
@@ -261,12 +331,12 @@ class VLLMModelManager:
         if not image_path.exists():
             raise FileNotFoundError(f"Image not found: {image_path}")
 
-        image = PILImage.open(image_path).convert("RGB")
-
         symptoms_str = ", ".join(patient_symptoms) if patient_symptoms else "Not provided"
         complaint_str = chief_complaint or "Not provided"
 
-        prompt = f"""Analyze this {modality.upper()} image for a clinical encounter.
+        if self.enable_vision:
+            image = PILImage.open(image_path).convert("RGB")
+            prompt = f"""Analyze this {modality.upper()} image for a clinical encounter.
 
 Clinical Context: {clinical_context or 'Not provided'}
 Patient's Chief Complaint: {complaint_str}
@@ -294,6 +364,35 @@ Possible diagnoses prioritised by clinical correlation.
 Next steps for correlated findings; follow-up for incidental findings.
 
 Flag urgent findings with ⚠️."""
+        else:
+            # Text-only mode: reason from clinical context without the actual image.
+            # This happens when enable_vision=False (8 GB GPU — encoder disabled to save VRAM).
+            image = None
+            prompt = f"""A {modality.upper()} image has been ordered for a clinical encounter.
+Note: Direct image analysis is unavailable in this mode. The following is a clinical
+reasoning summary based on provided context only — NOT a radiological interpretation.
+
+Modality: {modality.upper()}
+Clinical Context: {clinical_context or 'Not provided'}
+Chief Complaint: {complaint_str}
+Reported Symptoms: {symptoms_str}
+Body Region: {body_region or 'Not specified'}
+
+Based on the clinical context:
+
+## 1. CLINICAL FINDINGS (from history)
+Summarise relevant findings from the clinical context.
+
+## 2. DIFFERENTIAL CONSIDERATIONS
+Possible diagnoses based on history and symptom presentation.
+
+## 3. RECOMMENDED IMAGING REVIEW
+What a radiologist should specifically evaluate on the {modality.upper()}.
+
+## 4. NEXT STEPS
+Follow-up actions based on the clinical presentation.
+
+⚠️ Note: This response is based on text context only. Actual {modality.upper()} review by a radiologist is required."""
 
         response = self.generate_medgemma(prompt, image=image, temperature=0.3, max_tokens=1536)
 
@@ -304,6 +403,7 @@ Flag urgent findings with ⚠️."""
             "clinical_context": clinical_context,
             "chief_complaint": chief_complaint,
             "patient_symptoms": patient_symptoms or [],
+            "vision_enabled": self.enable_vision,
         }
 
     def process_encounter(

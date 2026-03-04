@@ -183,7 +183,7 @@ class SimulationEngine:
                     result = self.agent.process_query(query=prompt, patient_context={})
                     response = result.get("response", "").strip()
                 elif hasattr(self.agent, "chat"):
-                    response = self.agent.chat(prompt)
+                    response = self._clean_response(self.agent.chat(prompt))
                 else:
                     response = self._keyword_patient_response(case, question)
             except Exception as e:
@@ -290,7 +290,7 @@ class SimulationEngine:
                 result = self.agent.process_query(query=prompt, patient_context={})
                 feedback_text = result.get("response", "")
             elif hasattr(self.agent, "chat"):
-                feedback_text = self.agent.chat(prompt)
+                feedback_text = self._clean_response(self.agent.chat(prompt))
             else:
                 feedback_text = ""
 
@@ -387,6 +387,47 @@ class SimulationEngine:
         if session.status == "scored":
             raise ValueError("Session already completed")
         return session
+
+    @staticmethod
+    def _clean_response(text: str) -> str:
+        """Strip MedGemma internal thinking/planning preamble from responses.
+
+        The model sometimes emits a meta-commentary block before the actual
+        patient reply, e.g. 'thought ...' or 'I need to respond as the patient
+        ... Plan: 1. ...\n\nOkay, I'm really worried...'.
+        We detect the preamble by checking the first paragraph for planning
+        signals, then return only everything after the first blank line.
+        """
+        import re
+        # Strip leading <unusedN> token artefacts
+        text = re.sub(r"^<unused\d+>\s*", "", text.strip())
+
+        if "\n\n" not in text:
+            # No separator — if starts with 'thought', best-effort strip
+            if text.lower().startswith("thought"):
+                return re.sub(r"^thought\b.*", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+            return text
+
+        first_para, rest = text.split("\n\n", 1)
+        first_lower = first_para.lower()
+
+        preamble_signals = [
+            first_lower.startswith("thought"),
+            "i need to respond" in first_lower,
+            "i should respond" in first_lower,
+            "let me respond" in first_lower,
+            "plan:" in first_lower,
+            "my plan" in first_lower,
+            "let me think" in first_lower,
+            "i will respond" in first_lower,
+            # numbered planning list (e.g. "1. Stay in character")
+            bool(re.search(r"^\s*1\.", first_para, re.MULTILINE)),
+        ]
+
+        if any(preamble_signals) and rest.strip():
+            return rest.strip()
+
+        return text
 
     @staticmethod
     def _keyword_patient_response(case: ClinicalCase, question: str) -> str:

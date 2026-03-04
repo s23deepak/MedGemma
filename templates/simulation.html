@@ -13,7 +13,7 @@
     <style>
         /* ── Layout ── */
         body { font-family: 'Inter', sans-serif; }
-        .sim-wrapper { max-width: 1400px; margin: 0 auto; padding: 1.5rem 2rem 3rem; }
+        .sim-wrapper { max-width: 1600px; margin: 0 auto; padding: 1.5rem 2rem 3rem; }
 
         /* ── Screen switching ── */
         .screen { display: none; }
@@ -128,7 +128,7 @@
         /* ── Simulation layout ── */
         .sim-layout {
             display: grid;
-            grid-template-columns: 340px 1fr 280px;
+            grid-template-columns: 2fr 2fr 1fr;
             gap: 1.25rem;
             align-items: start;
         }
@@ -198,7 +198,7 @@
 
         /* ── Chat panel ── */
         .chat-messages {
-            height: 320px;
+            height: 480px;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
@@ -814,6 +814,17 @@ IV heparin bolus
     let orderedInvs = new Set();
     let examedSystems = new Set();
 
+    // ── Markdown helper ────────────────────────────────────────────────────────
+    function mdHtml(text) {
+        if (!text) return '';
+        let h = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        h = h.replace(/^#{1,3} (.+)$/gm, '<strong>$1</strong>');
+        h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        h = h.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        h = h.replace(/^[\*\-] (.+)$/gm, '• $1');
+        return h;
+    }
+
     const QUICK_QUESTIONS = [
         "Tell me about your pain",
         "When did it start?",
@@ -987,7 +998,7 @@ IV heparin bolus
         div.className = `msg msg-${role}`;
         div.innerHTML = `
             <div class="msg-label">${role === 'resident' ? 'You (Doctor)' : 'Patient'}</div>
-            <div class="msg-bubble">${text}</div>
+            <div class="msg-bubble">${role === 'patient' ? mdHtml(text) : text}</div>
         `;
         container.appendChild(div);
         container.scrollTop = container.scrollHeight;
@@ -1009,7 +1020,7 @@ IV heparin bolus
         const er = document.getElementById('examResult');
         er.style.display = 'block';
         document.getElementById('examResultName').textContent = data.system;
-        document.getElementById('examResultValue').textContent = data.findings;
+        document.getElementById('examResultValue').innerHTML = mdHtml(data.findings);
 
         switchTab('exam');
     }
@@ -1041,7 +1052,7 @@ IV heparin bolus
         const item = document.createElement('div');
         item.className = 'result-item';
         item.innerHTML = `<div class="result-name">${data.investigation}</div>
-                          <div class="result-value">${data.result}</div>`;
+                          <div class="result-value">${mdHtml(data.result)}</div>`;
         list.appendChild(item);
 
         switchTab('results');
@@ -1109,7 +1120,7 @@ IV heparin bolus
             div.innerHTML = `
                 <div class="domain-name">${domainNames[key] || key}</div>
                 <div class="domain-score">${pts}</div>
-                <div class="domain-fb">${score.domain_feedback[key] || ''}</div>
+                <div class="domain-fb">${mdHtml(score.domain_feedback[key] || '')}</div>
             `;
             dg.appendChild(div);
         });
@@ -1124,13 +1135,13 @@ IV heparin bolus
         // AI feedback
         if (score.ai_feedback) {
             document.getElementById('aiFeedbackBlock').style.display = 'block';
-            document.getElementById('aiFeedbackText').textContent = score.ai_feedback;
+            document.getElementById('aiFeedbackText').innerHTML = mdHtml(score.ai_feedback);
         }
 
         // Learning points
         const lp = document.getElementById('learningPoints');
         lp.innerHTML = (score.key_learning_points || []).map(p =>
-            `<div class="learning-point"><span class="lp-icon">→</span><span>${p}</span></div>`
+            `<div class="learning-point"><span class="lp-icon">→</span><span>${mdHtml(p)}</span></div>`
         ).join('');
     }
 
