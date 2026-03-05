@@ -157,7 +157,7 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
         if not raw_note or not raw_note.strip():
             return {"retrieved_context": ""}
         symptoms: list[str] = state["case_info"].get("symptoms", [])
-        context = compress_note_negation_aware(raw_note, symptoms, top_k=5)
+        context = compress_note_negation_aware(raw_note, symptoms, top_k=5, agent=agent)
         return {"retrieved_context": context}
 
     def _opinion_node(state: CouncilState) -> dict:

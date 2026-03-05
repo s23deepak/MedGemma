@@ -21,6 +21,7 @@ Enhanced features (metadata, recency re-ranking, source provenance)
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -307,60 +308,124 @@ except ImportError:
     _get_neg_detector = None  # type: ignore[assignment]
 
 
+def _extract_findings_with_model(
+    raw_note: str,
+    agent,
+) -> tuple[list[str], list[str]] | None:
+    """
+    Ask the model to extract clinical findings and their assertion status
+    directly from the raw note.
+
+    Returns (affirmed, negated) lists, or None if the call or JSON parsing
+    fails — the caller falls back to NegEx on None.
+
+    Supports both agent types:
+    - VLLMModelManager  → agent.generate_medgemma(prompt, ...)
+    - MedGemmaAgent     → agent.chat(prompt)
+    """
+    prompt = (
+        "Extract every clinical symptom and finding mentioned in the note below.\n"
+        "For each item, classify it as 'affirmed' (present/positive) or "
+        "'negated' (denied/absent/negative).\n"
+        "Return ONLY valid JSON — no prose, no markdown — in this exact format:\n"
+        '{"findings": [{"term": "chest pain", "status": "affirmed"}, ...]}\n\n'
+        f"Note:\n{raw_note}"
+    )
+    try:
+        if hasattr(agent, "generate_medgemma"):
+            raw = agent.generate_medgemma(prompt, temperature=0.0, max_tokens=512)
+        elif hasattr(agent, "chat"):
+            raw = agent.chat(prompt)
+        else:
+            return None
+
+        # Model may wrap JSON in prose — fish out the first {...} block
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not match:
+            return None
+
+        data = json.loads(match.group())
+        findings = data.get("findings", [])
+        affirmed = [f["term"] for f in findings if f.get("status") == "affirmed"]
+        negated  = [f["term"] for f in findings if f.get("status") == "negated"]
+        return affirmed, negated
+
+    except Exception:
+        return None
+
+
 def compress_note_negation_aware(
     raw_note: str,
     symptoms: list[str],
     top_k: int = 5,
     chunk_size: int = 250,
     overlap: int = 50,
+    agent=None,
 ) -> str:
     """
     Negation-aware variant of compress_note().
 
-    Steps
-    -----
-    1. Run NegEx on *raw_note* to split *symptoms* into affirmed vs. negated.
-    2. Build the embedding query from affirmed symptoms only so negated findings
-       do not pull in contradicting evidence from the rare-disease corpus.
-    3. Over-fetch (top_k × 2) chunks from the note.
-    4. Post-filter: drop any chunk that assertively mentions a negated symptom
-       (i.e. the chunk would count as evidence FOR a finding the patient denied).
-    5. Return the top_k surviving chunks in original narrative order.
+    Polarity detection priority
+    ---------------------------
+    1. Model extraction (agent provided): MedGemma extracts every finding
+       directly from the raw note with affirmed/negated labels — handles
+       clinical shorthand, abbreviations, and contextual negation that
+       regex-based NegEx misses.
+    2. NegEx fallback: deterministic pipeline when no agent is available
+       (SIMULATED_MODE, offline, or if the model extraction call fails).
+    3. Bare fallback: compress_note() when neither is available.
 
-    Falls back transparently to compress_note() when the negation module is
-    unavailable or the symptom list is empty.
+    Steps after polarity is resolved
+    ---------------------------------
+    3. Build the embedding query from affirmed terms only.
+    4. Over-fetch (top_k × 2) chunks from the note.
+    5. Post-filter: drop chunks that assertively mention a negated term
+       (NegEx applied per-chunk; skipped when NegEx is unavailable).
+    6. Return top_k surviving chunks in original narrative order.
     """
     if not raw_note or not raw_note.strip():
         return ""
-    if not _NEGATION_AVAILABLE or not symptoms:
+    if not symptoms:
         return compress_note(raw_note, symptoms, top_k=top_k,
                              chunk_size=chunk_size, overlap=overlap)
 
-    detector = _get_neg_detector()
+    # ── Step 1+2: resolve polarity ────────────────────────────────────────────
+    affirmed: list[str] = []
+    negated:  list[str] = []
 
-    # 1 – split into affirmed / negated
-    affirmed = detector.filter_affirmed(raw_note, symptoms)
-    negated = [s for s in symptoms if s not in set(affirmed)]
+    extracted = _extract_findings_with_model(raw_note, agent) if agent is not None else None
 
-    # 2 – query built from affirmed only; fall back to all if nothing affirmed
+    if extracted is not None:
+        affirmed, negated = extracted
+    elif _NEGATION_AVAILABLE:
+        detector = _get_neg_detector()
+        affirmed = detector.filter_affirmed(raw_note, symptoms)
+        negated  = [s for s in symptoms if s not in set(affirmed)]
+    else:
+        return compress_note(raw_note, symptoms, top_k=top_k,
+                             chunk_size=chunk_size, overlap=overlap)
+
+    # ── Step 3: build query — fallback to all symptoms if nothing affirmed ────
     query = " ".join(affirmed) if affirmed else " ".join(symptoms)
 
-    # 3 – chunk + over-fetch
+    # ── Step 4: chunk + over-fetch ────────────────────────────────────────────
     chunks = chunk_note(raw_note, chunk_size=chunk_size, overlap=overlap)
     fetch_k = min(len(chunks), top_k * 2)
     candidates = retrieve(query, chunks, top_k=fetch_k)
 
-    # 4 – post-filter: drop chunks that assertively mention a negated symptom
-    if negated:
+    # ── Step 5: post-filter chunks that assertively mention a negated term ────
+    #    NegEx is applied per-chunk regardless of which polarity source was used.
+    if negated and _NEGATION_AVAILABLE:
+        detector = _get_neg_detector()
         clean: list[str] = []
         for chunk in candidates:
             falsely_affirmed = detector.filter_affirmed(chunk, negated)
             if not falsely_affirmed:
                 clean.append(chunk)
-        # Safety: never return empty — keep all candidates if everything was filtered
+        # Safety: never return empty
         candidates = clean if clean else candidates
 
-    # 5 – take top_k in order
+    # ── Step 6: take top_k in narrative order ─────────────────────────────────
     return "\n---\n".join(candidates[:top_k])
 
 

@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Any
 
 from .cases import ClinicalCase, get_case, list_cases
+from .chat_chain import build_patient_chain, clear_session_history
 
 logger = logging.getLogger(__name__)
 
@@ -135,9 +136,11 @@ class SimulationEngine:
     def __init__(self, agent=None):
         self.agent = agent
         self._sessions: dict[str, SimulationSession] = {}
+        self._chain = build_patient_chain(agent) if agent is not None else None
 
     def set_agent(self, agent) -> None:
         self.agent = agent
+        self._chain = build_patient_chain(agent)
 
     # ── Session lifecycle ──────────────────────────────────────────────────────
 
@@ -163,33 +166,31 @@ class SimulationEngine:
     def ask_history(self, session_id: str, question: str) -> dict:
         """
         Resident asks the patient a history question.
-        MedGemma responds in character as the patient.
+        MedGemma responds in character as the patient via a stateful LangChain
+        chain — prior turns are injected as MessagesPlaceholder history so the
+        persona stays consistent across the session.
         Returns {"question": ..., "response": ..., "ai": bool}
         """
         session = self._get_active_session(session_id)
         case = session.case
-
-        # Build history context string from case data
         history_ctx = "\n".join(f"- {k}: {v}" for k, v in case.history_data.items())
 
-        if self.agent is not None:
-            prompt = PATIENT_PERSONA_TEMPLATE.format(
-                presentation=case.presentation,
-                history_context=history_ctx,
-                question=question,
-            )
+        if self._chain is not None:
             try:
-                if hasattr(self.agent, "process_query"):
-                    result = self.agent.process_query(query=prompt, patient_context={})
-                    response = result.get("response", "").strip()
-                elif hasattr(self.agent, "chat"):
-                    response = self._clean_response(self.agent.chat(prompt))
-                else:
-                    response = self._keyword_patient_response(case, question)
+                result = self._chain.invoke(
+                    {
+                        "case_presentation": case.presentation,
+                        "history_context": history_ctx,
+                        "question": question,
+                    },
+                    config={"configurable": {"session_id": session_id}},
+                )
+                response = self._clean_response(result.content)
+                ai = True
             except Exception as e:
-                logger.warning(f"Agent history response failed: {e}")
+                logger.warning(f"Chain history response failed: {e}")
                 response = self._keyword_patient_response(case, question)
-            ai = True
+                ai = False
         else:
             response = self._keyword_patient_response(case, question)
             ai = False
@@ -256,6 +257,9 @@ class SimulationEngine:
         session.score = score
         session.status = "scored"
         session.completed_at = datetime.now().isoformat()
+
+        # Release LangChain message history — session is complete
+        clear_session_history(session_id)
 
         return score
 

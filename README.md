@@ -158,6 +158,24 @@ Tracks documentation quality across all encounters. Flags notes with missing sec
 
 MedGemma plays a standardised patient. Residents take history, examine, order investigations, then submit a diagnosis and management plan. MedGemma scores the encounter across five clinical domains (history, examination, investigations, diagnosis, management) and generates a structured debrief with specific feedback per domain.
 
+The patient persona is **stateful** — powered by a LangChain `RunnableWithMessageHistory` chain (`src/simulation/chat_chain.py`). Every prior exchange is injected via a `MessagesPlaceholder` into the prompt on each turn, so the patient never contradicts itself within a session ("the pain started 2 hours ago" stays 2 hours ago regardless of how the question is phrased later). Session history is released automatically when the resident submits for scoring.
+
+```
+ChatPromptTemplate (system: case context)
+  + MessagesPlaceholder("history")   ← all prior turns injected here
+  + HumanMessage(question)
+        │
+        ▼
+MedGemmaRunnable(Runnable)           ← bridges LangChain messages → agent API
+  ├─ agent.generate_medgemma()       (VLLMModelManager)
+  └─ agent.chat()                    (MedGemmaAgent / HF Transformers)
+        │ AIMessage
+        ▼
+RunnableWithMessageHistory           ← persists HumanMessage + AIMessage
+  └─ InMemoryChatMessageHistory        into per-session store after every turn
+       keyed by session_id
+```
+
 <table>
 <tr>
 <td width="50%">
@@ -180,7 +198,8 @@ MedGemma plays a standardised patient. Residents take history, examine, order in
 | **Discharge Planner** | Patient-friendly discharge summaries with LACE readmission risk scoring (HIGH / MEDIUM / LOW) |
 | **Prior Authorization** | Auto-detects orders requiring prior auth; approve/deny workflow with AI-generated referral letters |
 | **Medication Reconciliation** | Compares admission medications against inpatient orders; surfaces added and discontinued drugs |
-| **Negation-Aware RAG** | NegEx filters affirmed vs. negated symptoms before building retrieval queries; post-filters chunks that contradict the patient's stated findings |
+| **Negation-Aware RAG** | MedGemma extracts affirmed/negated findings directly from the note (handles shorthand, contextual negation); NegEx used as fallback. Negated terms excluded from retrieval query and used to post-filter contradicting chunks |
+| **Stateful Simulation Chat** | `RunnableWithMessageHistory` + `InMemoryChatMessageHistory` (LangChain) keeps per-session patient-persona context — patient never contradicts prior answers; history released on scoring |
 | **Local Health Trends** | Correlates local public-health and environmental events with same-day symptom patterns |
 | **External Medical Vocabulary** | NLM MeSH enrichment with shared Firestore cache and optional vector expansion |
 | **Multi-Hospital Config** | Multi-tenant registry with per-hospital formulary restrictions and feature flags |
@@ -198,7 +217,7 @@ MedASR (Speech) ─┐
 Medical Image ───┘         ↑                      ↑
                             │                      │
                     FHIR EHR Context         PubMed Literature
-                    Mem0 Memory Recall        Local Trends + NegEx RAG
+                    Mem0 Memory Recall        Model extraction RAG (NegEx fallback)
 
 LangGraph Council:
   START → initialize → retrieve_context (NegEx-aware RAG)
@@ -207,6 +226,11 @@ LangGraph Council:
         → run_pubmed (Zebra Hunt)
         ├─ [iterative] → [Send × N] generate_r2_opinion → calculate_r2_consensus → END
         └─ [standard]                                                             → END
+
+LangChain Simulation:
+  ChatPromptTemplate + MessagesPlaceholder("history")
+        → MedGemmaRunnable (Runnable)
+        → RunnableWithMessageHistory (InMemoryChatMessageHistory keyed by session_id)
 ```
 
 ## Project Structure
@@ -232,6 +256,7 @@ LangGraph Council:
 │   ├── config/             # Multi-hospital registry
 │   ├── monitoring/         # Performance profiling
 │   ├── referral/           # Specialist referral letter generation
+│   ├── simulation/         # Resident simulation engine + LangChain stateful chat chain
 │   └── soap/               # SOAP note generation
 ├── static/                 # Frontend UI (app.js, ai_portal.js, styles.css)
 ├── templates/              # Jinja2 HTML templates
