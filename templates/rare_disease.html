@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <meta name="description" content="TTT-inspired rare disease diagnostic hunt — iterative evidence-guided hypothesis refinement for atypical presentations.">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rare Disease Hunt | MedGemma</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        .rare-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .rare-grid {
+            display: grid;
+            grid-template-columns: 420px 1fr;
+            gap: 1.5rem;
+            align-items: start;
+        }
+
+        /* Input panel */
+        .input-panel {
+            background: var(--bg-secondary);
+            border-radius: 16px;
+            padding: 1.75rem;
+            box-shadow: var(--shadow-sm);
+            border: 1px solid rgba(226,232,240,0.8);
+            position: sticky;
+            top: 80px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .input-panel::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #7c3aed, #db2777);
+        }
+
+        .input-group {
+            margin-bottom: 1rem;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 0.4rem;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .input-group input,
+        .input-group textarea,
+        .input-group select {
+            width: 100%;
+            padding: 0.65rem 0.8rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.9rem;
+            box-sizing: border-box;
+        }
+
+        .input-group textarea {
+            min-height: 80px;
+            resize: vertical;
+        }
+
+        .demo-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+        }
+
+        .btn-hunt {
+            width: 100%;
+            padding: 0.9rem;
+            background: linear-gradient(135deg, #7c3aed, #db2777);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 700;
+            cursor: pointer;
+            letter-spacing: 0.02em;
+            margin-top: 0.5rem;
+            transition: opacity 0.2s;
+        }
+
+        .btn-hunt:hover { opacity: 0.9; }
+        .btn-hunt:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Results panel */
+        .results-panel {
+            min-height: 400px;
+        }
+
+        .disclaimer-banner {
+            background: #fffbeb;
+            border: 1px solid #fcd34d;
+            border-radius: 10px;
+            padding: 0.85rem 1rem;
+            font-size: 0.82rem;
+            color: #92400e;
+            margin-bottom: 1.25rem;
+        }
+
+        .convergence-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 0.4rem 0.9rem;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 1.25rem;
+        }
+
+        .convergence-badge .dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+        }
+
+        .convergence-badge .dot.partial { background: #f59e0b; }
+
+        /* Hypothesis cards */
+        .hypothesis-card {
+            background: var(--bg-secondary);
+            border-radius: 14px;
+            padding: 1.25rem 1.5rem;
+            margin-bottom: 1rem;
+            border: 1px solid rgba(226,232,240,0.8);
+            box-shadow: var(--shadow-sm);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hypothesis-card::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 4px;
+        }
+
+        .hypothesis-card.rank-1::before { background: linear-gradient(180deg, #7c3aed, #db2777); }
+        .hypothesis-card.rank-2::before { background: #4f8ef7; }
+        .hypothesis-card.rank-3::before { background: #10b981; }
+        .hypothesis-card.rank-4::before { background: #64748b; }
+        .hypothesis-card.rank-5::before { background: #94a3b8; }
+
+        .hyp-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .hyp-rank {
+            font-size: 1.6rem;
+            font-weight: 800;
+            color: var(--text-secondary);
+            line-height: 1;
+            min-width: 2rem;
+        }
+
+        .hyp-rank.rank-1 { color: #7c3aed; }
+        .hyp-rank.rank-2 { color: #4f8ef7; }
+        .hyp-rank.rank-3 { color: #10b981; }
+
+        .hyp-name {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            flex: 1;
+        }
+
+        .hyp-icd {
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: #e0e7ff;
+            color: #4338ca;
+            border-radius: 6px;
+            padding: 0.2rem 0.5rem;
+            white-space: nowrap;
+        }
+
+        .badge-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .badge {
+            font-size: 0.75rem;
+            font-weight: 600;
+            border-radius: 20px;
+            padding: 0.25rem 0.65rem;
+        }
+
+        .badge-evidence-well { background: #dcfce7; color: #166534; }
+        .badge-evidence-some { background: #fef9c3; color: #854d0e; }
+        .badge-evidence-spec { background: #fee2e2; color: #991b1b; }
+
+        .badge-urgency-urgent { background: #fee2e2; color: #991b1b; }
+        .badge-urgency-elective { background: #fef9c3; color: #854d0e; }
+        .badge-urgency-low { background: #f1f5f9; color: #475569; }
+
+        .badge-specialist {
+            background: #ede9fe;
+            color: #5b21b6;
+        }
+
+        .reward-bar-wrap {
+            margin-bottom: 0.75rem;
+        }
+
+        .reward-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.2rem;
+        }
+
+        .reward-bar {
+            height: 6px;
+            border-radius: 3px;
+            background: #e2e8f0;
+            overflow: hidden;
+        }
+
+        .reward-fill {
+            height: 100%;
+            border-radius: 3px;
+            background: linear-gradient(90deg, #7c3aed, #db2777);
+            transition: width 0.6s ease;
+        }
+
+        .hyp-section {
+            margin-bottom: 0.6rem;
+        }
+
+        .hyp-section-title {
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-bottom: 0.3rem;
+        }
+
+        .feature-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .feature-list li {
+            font-size: 0.85rem;
+            padding: 0.2rem 0;
+            color: var(--text-primary);
+        }
+
+        .feature-list li::before {
+            content: '✓ ';
+            color: #10b981;
+            font-weight: 700;
+        }
+
+        .feature-list.anti li::before {
+            content: '✗ ';
+            color: #ef4444;
+        }
+
+        .feature-list.tests li::before {
+            content: '→ ';
+            color: #7c3aed;
+        }
+
+        details.citations-toggle {
+            border-top: 1px solid var(--border);
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+        }
+
+        details.citations-toggle summary {
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: #4f8ef7;
+        }
+
+        .citation-item {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            padding: 0.25rem 0;
+            border-bottom: 1px dashed #e2e8f0;
+        }
+
+        .copy-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.5rem 1rem;
+            background: #f1f5f9;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            cursor: pointer;
+            color: var(--text-secondary);
+            transition: background 0.15s;
+            margin-bottom: 1.25rem;
+        }
+
+        .copy-btn:hover { background: #e2e8f0; }
+
+        .loading-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+
+        .ttt-spinner {
+            width: 48px; height: 48px;
+            border: 4px solid #e2e8f0;
+            border-top-color: #7c3aed;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .ttt-progress {
+            font-size: 0.88rem;
+            color: #7c3aed;
+            margin-top: 0.5rem;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: var(--text-secondary);
+        }
+
+        .empty-state-icon { font-size: 3rem; margin-bottom: 1rem; }
+
+        .results-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+
+        @media (max-width: 900px) {
+            .rare-grid { grid-template-columns: 1fr; }
+            .input-panel { position: static; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="header-content" style="max-width:1400px;margin:0 auto;">
+                <a href="/" class="logo" style="text-decoration:none;">
+                    <span class="logo-icon">⚕</span>
+                    <span class="logo-text">MedGemma</span>
+                </a>
+                <div class="nav-links">
+                    <a href="/">Encounters</a>
+                    <a href="/rounding">Rounding</a>
+                    <a href="/handoff">Handoff</a>
+                    <a href="/safety-dashboard">Safety</a>
+                    <a href="/shift-brief">Shift Brief</a>
+                    <a href="/history">Patient History</a>
+                    <a href="/compliance">Compliance</a>
+                    <a href="/council">Diagnostic Council</a>
+                    <a href="/patient-portal">Patient Portal</a>
+                    <a href="/ai-portal">AI Chat Portal</a>
+                    <a href="/simulation">Simulation</a>
+                    <a href="/rare-disease" class="active">Rare Disease Hunt</a>
+                </div>
+            </div>
+        </header>
+
+        <main class="rare-container">
+            <div style="margin-bottom:1.5rem;">
+                <h1 style="margin-bottom:0.3rem;">Rare Disease Diagnostic Hunt</h1>
+                <p style="color:var(--text-secondary);font-size:0.9rem;max-width:700px;">
+                    TTT-inspired iterative hypothesis refinement for atypical presentations.
+                    Enter the clinical facts below — the system will hunt for rare diagnoses
+                    using a reward-guided loop, giving you ranked candidates with evidence,
+                    gap analysis, and next steps.
+                </p>
+            </div>
+
+            <div class="rare-grid">
+                <!-- ── Input Panel ── -->
+                <div class="input-panel">
+                    <h2 style="margin-bottom:1rem; font-size:1.1rem;">Clinical Case Input</h2>
+
+                    <div class="input-group">
+                        <label>Presenting Symptoms <span style="color:#ef4444">*</span></label>
+                        <textarea id="rdSymptoms" rows="3"
+                            placeholder="One symptom per line or comma-separated&#10;e.g., recurrent fever&#10;splenomegaly&#10;elevated ferritin&#10;cytopenias"></textarea>
+                    </div>
+
+                    <div class="input-group">
+                        <label>Patient History (PMH, comorbidities)</label>
+                        <textarea id="rdHistory" rows="2"
+                            placeholder="e.g., 28yo female, no significant PMH, recurrent episodes over 6 months"></textarea>
+                    </div>
+
+                    <div class="input-group">
+                        <label>Imaging Findings</label>
+                        <textarea id="rdImaging" rows="2"
+                            placeholder="e.g., CT abdomen: hepatosplenomegaly, no focal liver lesion"></textarea>
+                    </div>
+
+                    <div class="input-group">
+                        <label>Lab Values (key=value, one per line)</label>
+                        <textarea id="rdLabs" rows="3"
+                            placeholder="WBC: 2.1 (low)&#10;Hgb: 8.4 (low)&#10;Ferritin: 12400 (elevated)&#10;Triglycerides: 380 (elevated)"></textarea>
+                    </div>
+
+                    <div class="demo-grid">
+                        <div class="input-group">
+                            <label>Vitals</label>
+                            <input type="text" id="rdVitals"
+                                placeholder="BP 110/70, HR 102, T 39.1°C">
+                        </div>
+                        <div class="input-group">
+                            <label>Demographics</label>
+                            <input type="text" id="rdDemographics"
+                                placeholder="28yo female">
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label>Max Results</label>
+                        <select id="rdMaxHyp">
+                            <option value="3">Top 3</option>
+                            <option value="5" selected>Top 5</option>
+                        </select>
+                    </div>
+
+                    <details class="input-group" style="margin-bottom:1rem;">
+                        <summary style="cursor:pointer;font-weight:600;color:#7c3aed;font-size:0.88rem;">
+                            Paste Clinical Note (optional — RAG context)
+                        </summary>
+                        <textarea id="rdRawNote" rows="5" style="margin-top:0.5rem;"
+                            placeholder="Paste the full H&P, progress note, or other clinical note here."></textarea>
+                    </details>
+
+                    <button class="btn-hunt" id="huntBtn" onclick="startHunt()">
+                        Hunt for Rare Diseases
+                    </button>
+
+                    <!-- Demo case loader -->
+                    <div style="margin-top:0.75rem; text-align:center;">
+                        <span style="font-size:0.78rem;color:var(--text-secondary);">Load demo: </span>
+                        <button onclick="loadDemo('hlh')" style="font-size:0.75rem;background:none;border:1px solid #e2e8f0;border-radius:6px;padding:0.2rem 0.5rem;cursor:pointer;color:#7c3aed;">HLH</button>
+                        <button onclick="loadDemo('aps')" style="font-size:0.75rem;background:none;border:1px solid #e2e8f0;border-radius:6px;padding:0.2rem 0.5rem;cursor:pointer;color:#7c3aed;">APS</button>
+                        <button onclick="loadDemo('wilson')" style="font-size:0.75rem;background:none;border:1px solid #e2e8f0;border-radius:6px;padding:0.2rem 0.5rem;cursor:pointer;color:#7c3aed;">Wilson's</button>
+                        <button onclick="loadDemo('melas')" style="font-size:0.75rem;background:none;border:1px solid #e2e8f0;border-radius:6px;padding:0.2rem 0.5rem;cursor:pointer;color:#7c3aed;">MELAS</button>
+                    </div>
+                </div>
+
+                <!-- ── Results Panel ── -->
+                <div class="results-panel" id="resultsPanel">
+                    <div class="empty-state" id="emptyState">
+                        <div class="empty-state-icon">🔬</div>
+                        <p style="font-weight:600;">Enter a clinical case to begin the rare disease hunt</p>
+                        <p style="font-size:0.85rem;max-width:400px;margin:0.5rem auto 0;">
+                            The TTT-inspired loop will iteratively refine hypotheses using
+                            PubMed evidence and a diagnostic reward function — giving you
+                            directions even when evidence is sparse.
+                        </p>
+                    </div>
+
+                    <div id="loadingState" style="display:none;" class="loading-state">
+                        <div class="ttt-spinner"></div>
+                        <p style="font-weight:600;">Running TTT diagnostic loop...</p>
+                        <p class="ttt-progress" id="tttProgressMsg">Iteration 1: Generating seed hypotheses</p>
+                    </div>
+
+                    <div id="resultsContent" style="display:none;">
+                        <div class="results-header">
+                            <div>
+                                <div id="convergenceBadge" class="convergence-badge">
+                                    <div class="dot" id="convDot"></div>
+                                    <span id="convText">—</span>
+                                </div>
+                            </div>
+                            <button class="copy-btn" onclick="copyReport()">
+                                Copy Report (JSON)
+                            </button>
+                        </div>
+
+                        <div class="disclaimer-banner" id="disclaimerBanner">
+                            ⚕ <strong>Clinical Direction Only:</strong>
+                            This analysis provides directional guidance and does not constitute a diagnosis.
+                            All findings require physician evaluation and validation. Clinical judgment takes precedence.
+                        </div>
+
+                        <div id="hypothesesList"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer class="app-footer">
+            <p>MedGemma Clinical Assistant — Rare Disease Hunt powered by TTT-inspired iterative hypothesis refinement</p>
+        </footer>
+    </div>
+
+    <script>
+        let _lastReport = null;
+
+        // ── Demo cases ──────────────────────────────────────────────────────── //
+        const DEMOS = {
+            hlh: {
+                symptoms: "recurrent fever\nsplenomegaly\ncytopenias\nelevated ferritin\nhypertriglyceridemia",
+                history: "24yo female, no significant PMH, 6-week illness, multiple ER visits attributed to viral syndrome",
+                imaging: "CT abdomen: hepatosplenomegaly, no focal mass",
+                labs: "WBC: 2.1 (low)\nHgb: 7.8 (low)\nPlatelets: 48k (low)\nFerritin: 14200 (markedly elevated)\nTriglycerides: 410 (elevated)\nFibrinogen: 98 (low)\nLDH: 820 (elevated)",
+                vitals: "T 39.4°C, HR 118, BP 94/58",
+                demo: "28yo female"
+            },
+            aps: {
+                symptoms: "recurrent DVT\npulmonary embolism\nlivedo reticularis\nthrombocytopenia\nrecurrent miscarriage",
+                history: "32yo female, 3 prior miscarriages, one unprovoked PE age 29, on warfarin",
+                imaging: "CT-PA: bilateral pulmonary emboli",
+                labs: "Platelets: 89k (low)\naPTT: prolonged\nAnti-cardiolipin IgG: high positive",
+                vitals: "HR 96, SpO2 94%, BP 118/72",
+                demo: "32yo female"
+            },
+            wilson: {
+                symptoms: "liver disease young patient\nneuropsychiatric symptoms\nKayser-Fleischer rings\nhemolytic anemia\ndysarthria",
+                history: "21yo male, psychiatric symptoms for 8 months, progressive tremor, family history unknown",
+                imaging: "MRI brain: putaminal signal abnormality bilaterally",
+                labs: "ALT: 280 (elevated)\nAST: 245 (elevated)\nCeruloplasmin: 5 (low)\nCoombs test: negative",
+                vitals: "Afebrile, HR 78, BP 112/70",
+                demo: "21yo male"
+            },
+            melas: {
+                symptoms: "stroke-like episodes young patient\nelevated lactate\nsensorineural hearing loss\nseizures\nmigraine",
+                history: "19yo female, maternal family history of diabetes and hearing loss, recurrent strokes",
+                imaging: "MRI brain: cortical signal changes not following vascular territory, bilateral",
+                labs: "Lactate: 4.8 (elevated)\nPyruvate: 0.22 (elevated)\nCPK: 340 (mildly elevated)",
+                vitals: "BP 108/64, HR 88",
+                demo: "19yo female"
+            }
+        };
+
+        function loadDemo(key) {
+            const d = DEMOS[key];
+            if (!d) return;
+            document.getElementById('rdSymptoms').value = d.symptoms;
+            document.getElementById('rdHistory').value = d.history;
+            document.getElementById('rdImaging').value = d.imaging;
+            document.getElementById('rdLabs').value = d.labs;
+            document.getElementById('rdVitals').value = d.vitals;
+            document.getElementById('rdDemographics').value = d.demo;
+        }
+
+        // ── Parsing helpers ──────────────────────────────────────────────── //
+        function parseSymptoms(raw) {
+            return raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+        }
+
+        function parseLabs(raw) {
+            const result = {};
+            raw.split(/\n/).forEach(line => {
+                const idx = line.indexOf(':');
+                if (idx > 0) {
+                    result[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+                }
+            });
+            return result;
+        }
+
+        function parseDemographics(raw) {
+            const d = {};
+            const ageMatch = raw.match(/(\d+)/);
+            if (ageMatch) d.age = ageMatch[1];
+            const sexMatch = raw.toLowerCase();
+            if (sexMatch.includes('female') || sexMatch.includes('woman')) d.sex = 'female';
+            else if (sexMatch.includes('male') || sexMatch.includes('man')) d.sex = 'male';
+            return d;
+        }
+
+        // ── TTT progress messaging ────────────────────────────────────────── //
+        const TTT_MESSAGES = [
+            'Iteration 1: Fingerprinting clinical signals & querying ontology...',
+            'Iteration 1: Generating initial hypotheses via MedGemma...',
+            'Iteration 2: Fetching PubMed evidence per hypothesis...',
+            'Iteration 2: Computing diagnostic reward scores...',
+            'Iteration 3: Expanding search via ontology adjacency...',
+            'Iteration 3: Running LLM self-critique for unexplained features...',
+            'Converging on best-supported rare disease candidates...',
+        ];
+
+        let _tttMsgIdx = 0;
+        let _tttInterval = null;
+
+        function startProgressMessages() {
+            _tttMsgIdx = 0;
+            const el = document.getElementById('tttProgressMsg');
+            el.textContent = TTT_MESSAGES[0];
+            _tttInterval = setInterval(() => {
+                _tttMsgIdx = (_tttMsgIdx + 1) % TTT_MESSAGES.length;
+                el.textContent = TTT_MESSAGES[_tttMsgIdx];
+            }, 2800);
+        }
+
+        function stopProgressMessages() {
+            if (_tttInterval) { clearInterval(_tttInterval); _tttInterval = null; }
+        }
+
+        // ── Main hunt ────────────────────────────────────────────────────── //
+        async function startHunt() {
+            const symptomsRaw = document.getElementById('rdSymptoms').value.trim();
+            if (!symptomsRaw) {
+                alert('Please enter at least one presenting symptom.');
+                return;
+            }
+
+            const payload = {
+                symptoms: parseSymptoms(symptomsRaw),
+                patient_history: document.getElementById('rdHistory').value.trim(),
+                imaging_findings: document.getElementById('rdImaging').value.trim(),
+                labs: parseLabs(document.getElementById('rdLabs').value),
+                vitals: document.getElementById('rdVitals').value.trim(),
+                demographics: parseDemographics(document.getElementById('rdDemographics').value),
+                raw_note: document.getElementById('rdRawNote').value.trim(),
+                max_hypotheses: parseInt(document.getElementById('rdMaxHyp').value, 10),
+            };
+
+            document.getElementById('huntBtn').disabled = true;
+            document.getElementById('emptyState').style.display = 'none';
+            document.getElementById('resultsContent').style.display = 'none';
+            document.getElementById('loadingState').style.display = 'block';
+            startProgressMessages();
+
+            try {
+                const resp = await fetch('/api/rare-disease/hunt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    throw new Error(err.detail || `HTTP ${resp.status}`);
+                }
+                const report = await resp.json();
+                _lastReport = report;
+                renderReport(report);
+            } catch (err) {
+                alert('Hunt failed: ' + err.message);
+                document.getElementById('emptyState').style.display = 'block';
+            } finally {
+                stopProgressMessages();
+                document.getElementById('huntBtn').disabled = false;
+                document.getElementById('loadingState').style.display = 'none';
+            }
+        }
+
+        // ── Rendering ────────────────────────────────────────────────────── //
+        function renderReport(report) {
+            const conv = report.convergence || {};
+            const converged = conv.converged;
+            const iters = conv.iterations_performed || 1;
+            const bestReward = (conv.convergence_reward || 0).toFixed(2);
+
+            const dot = document.getElementById('convDot');
+            dot.className = 'dot' + (converged ? '' : ' partial');
+            document.getElementById('convText').textContent =
+                `${converged ? 'Converged' : 'Partial convergence'} • ${iters} TTT iteration${iters !== 1 ? 's' : ''} • Best reward ${bestReward}`;
+
+            const list = document.getElementById('hypothesesList');
+            list.innerHTML = '';
+            (report.hypotheses || []).forEach((h, i) => {
+                list.appendChild(buildHypCard(h, i + 1));
+            });
+
+            document.getElementById('resultsContent').style.display = 'block';
+        }
+
+        function buildHypCard(h, rank) {
+            const card = document.createElement('div');
+            card.className = `hypothesis-card rank-${rank}`;
+
+            const tierClass = {
+                'well-evidenced': 'badge-evidence-well',
+                'some-evidence': 'badge-evidence-some',
+                'speculative': 'badge-evidence-spec',
+            }[h.evidence_tier] || 'badge-evidence-spec';
+
+            const urgencyClass = {
+                urgent: 'badge-urgency-urgent',
+                elective: 'badge-urgency-elective',
+                low: 'badge-urgency-low',
+            }[h.urgency] || 'badge-urgency-low';
+
+            const rewardPct = Math.round((h.reward_score || 0) * 100);
+
+            let citationsHtml = '';
+            if (h.pubmed_citations && h.pubmed_citations.length > 0) {
+                const items = h.pubmed_citations.map(c =>
+                    `<div class="citation-item">${escHtml(c)}</div>`
+                ).join('');
+                citationsHtml = `
+                    <details class="citations-toggle">
+                        <summary>PubMed Citations (${h.pubmed_citations.length})</summary>
+                        <div style="margin-top:0.5rem;">${items}</div>
+                    </details>`;
+            }
+
+            const matchingHtml = (h.matching_features || []).length > 0
+                ? `<div class="hyp-section">
+                    <div class="hyp-section-title">Matching Features</div>
+                    <ul class="feature-list">${(h.matching_features || []).map(f => `<li>${escHtml(f)}</li>`).join('')}</ul>
+                   </div>` : '';
+
+            const antiHtml = (h.anti_features || []).length > 0
+                ? `<div class="hyp-section">
+                    <div class="hyp-section-title">Not Documented (expected features)</div>
+                    <ul class="feature-list anti">${(h.anti_features || []).map(f => `<li>${escHtml(f)}</li>`).join('')}</ul>
+                   </div>` : '';
+
+            const testsHtml = (h.confirmatory_tests || []).length > 0
+                ? `<div class="hyp-section">
+                    <div class="hyp-section-title">Recommended Workup</div>
+                    <ul class="feature-list tests">${(h.confirmatory_tests || []).slice(0, 5).map(t => `<li>${escHtml(t)}</li>`).join('')}</ul>
+                   </div>` : '';
+
+            card.innerHTML = `
+                <div class="hyp-header">
+                    <div class="hyp-rank rank-${rank}">#${rank}</div>
+                    <div class="hyp-name">${escHtml(h.name)}</div>
+                    <span class="hyp-icd">${escHtml(h.icd10)}</span>
+                </div>
+                <div class="badge-row">
+                    <span class="badge ${tierClass}">${escHtml((h.evidence_tier || '').replace('-', ' '))}</span>
+                    <span class="badge ${urgencyClass}">
+                        ${h.urgency === 'urgent' ? '! ' : ''}${escHtml(h.urgency)}
+                    </span>
+                    <span class="badge badge-specialist">${escHtml(h.specialist_type || 'Specialist')}</span>
+                </div>
+                <div class="reward-bar-wrap">
+                    <div class="reward-label">
+                        <span>Reward score</span>
+                        <span>${rewardPct}%</span>
+                    </div>
+                    <div class="reward-bar">
+                        <div class="reward-fill" style="width:${rewardPct}%"></div>
+                    </div>
+                    <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.2rem;">
+                        Symptom coverage ${Math.round((h.symptom_coverage||0)*100)}% &middot;
+                        Evidence ${Math.round((h.evidence_strength||0)*100)}% &middot;
+                        Coherence ${Math.round((h.coherence_score||0)*100)}%
+                    </div>
+                </div>
+                ${h.reasoning ? `<p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:0.75rem;">${escHtml(h.reasoning)}</p>` : ''}
+                ${matchingHtml}
+                ${antiHtml}
+                ${testsHtml}
+                ${citationsHtml}
+            `;
+            return card;
+        }
+
+        function escHtml(str) {
+            return String(str || '').replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        function copyReport() {
+            if (!_lastReport) return;
+            navigator.clipboard.writeText(JSON.stringify(_lastReport, null, 2))
+                .then(() => alert('Report copied to clipboard.'))
+                .catch(() => alert('Clipboard write failed. Check browser permissions.'));
+        }
+    </script>
+</body>
+</html>

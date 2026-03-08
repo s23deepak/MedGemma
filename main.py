@@ -41,6 +41,7 @@ from src.inpatient import (
 from src.audit.audit_logger import get_audit_logger
 from src.monitoring.perf_tracker import track_perf, get_stats as get_perf_stats
 from src.config.hospital_config import get_hospital_registry, Hospital
+from src.rare_disease import get_rare_disease_director, RareCaseInput
 
 # Configure logging
 logging.basicConfig(
@@ -76,6 +77,9 @@ discharge_planner = None
 # Cross-cutting services
 audit_logger = None
 hospital_registry = None
+
+# Rare disease director (TTT-inspired iterative diagnostic hunt)
+rare_disease_director = None
 
 # Store active sessions
 sessions: dict[str, dict] = {}
@@ -191,7 +195,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global fhir_server, soap_generator, treatment_service, discharge_monitor, prior_auth_service, pubmed_agent, shift_brief_service, referral_service, simulation_engine, local_trends_service, trends_refresh_task
     global rounding_service, sbar_service, safety_service, discharge_planner
-    global audit_logger, hospital_registry
+    global audit_logger, hospital_registry, rare_disease_director
     
     logger.info("Starting MedGemma Clinical Assistant...")
 
@@ -233,6 +237,7 @@ async def lifespan(app: FastAPI):
     discharge_planner = get_discharge_planner(fhir_server)
     audit_logger = get_audit_logger()
     hospital_registry = get_hospital_registry()
+    rare_disease_director = get_rare_disease_director()
     logger.info("Treatment summary, discharge monitoring, prior auth, PubMed synthesis, shift brief, referral letter, simulation, and inpatient services initialized")
 
     # Run 60-day hospital-case finalization in background (non-blocking)
@@ -251,6 +256,8 @@ async def lifespan(app: FastAPI):
     if agent is not None:
         logger.info(f"Agent loaded: {type(agent).__name__}")
         simulation_engine.set_agent(agent)
+        rare_disease_director.agent = agent
+        rare_disease_director.pubmed_agent = pubmed_agent
     else:
         logger.info("No agent loaded (simulated mode or model unavailable)")
     
@@ -965,6 +972,16 @@ async def api_shift_brief(payload: dict):
 async def simulation_page(request: Request):
     """Clinical simulation lab for resident training."""
     return templates.TemplateResponse("simulation.html", {"request": request})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Rare Disease Hunt routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/rare-disease", response_class=HTMLResponse)
+async def rare_disease_page(request: Request):
+    """TTT-inspired rare disease directional diagnostic hunt."""
+    return templates.TemplateResponse("rare_disease.html", {"request": request})
 
 
 @app.get("/api/simulation/cases")
@@ -2424,6 +2441,59 @@ async def api_hospital_patients(hospital_id: str):
         if fhir_server.patients.get(p["id"], {}).get("hospital_id") == hospital_id
     ]
     return {"hospital_id": hospital_id, "patients": matched, "count": len(matched)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Rare Disease API
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/rare-disease/hunt")
+@track_perf("rare_disease_hunt")
+async def api_rare_disease_hunt(request: Request):
+    """
+    TTT-inspired rare disease diagnostic hunt.
+
+    Body: RareCaseInput JSON
+    Returns: RareDiseaseReport JSON
+
+    The endpoint runs the pseudo-Test-Time-Training iterative refinement loop:
+      1. Symptom fingerprinting + ontology seed hypotheses
+      2. MedGemma LLM hypothesis generation (if agent available)
+      3. PubMed evidence retrieval per hypothesis (if pubmed_agent available)
+      4. Diagnostic reward scoring (symptom coverage × evidence × coherence)
+      5. If reward < threshold → expand via ontology adjacency + LLM self-critique
+      6. Repeat up to max_iterations
+      7. Return ranked rare disease candidates with confirmatory tests and citations
+    """
+    if rare_disease_director is None:
+        raise HTTPException(status_code=503, detail="Rare disease director not initialized")
+    try:
+        payload = await request.json()
+        case = RareCaseInput(**payload)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid request body: {exc}")
+
+    try:
+        report = await rare_disease_director.hunt(case)
+    except Exception as exc:
+        logger.exception("Rare disease hunt failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if audit_logger is not None:
+        audit_logger.log(
+            event_type="clinical_ai",
+            action="rare_disease_hunt",
+            patient_id=None,
+            details={
+                "symptoms_count": len(case.symptoms),
+                "hypotheses_returned": len(report.hypotheses),
+                "iterations": report.convergence.iterations_performed,
+                "converged": report.convergence.converged,
+                "top_hypothesis": report.hypotheses[0].name if report.hypotheses else None,
+            },
+        )
+
+    return report.model_dump(mode="json")
 
 
 if __name__ == "__main__":

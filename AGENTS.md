@@ -150,6 +150,36 @@ Multi-tenant hospital configuration with per-hospital formulary restrictions and
 - **Demo hospitals**: GENERAL (Chicago) — all features enabled; COMMUNITY (New York) — prior_auth and simulation disabled, formulary restricts adalimumab and pembrolizumab
 - **Patient assignment**: P001–P004 → GENERAL; P005 (Dorothy Chen) → COMMUNITY
 
+### rare_disease_director
+TTT-inspired iterative rare disease diagnostic hunt for atypical presentations where common diagnoses have been excluded.
+- **Route**: `POST /api/rare-disease/hunt` (JSON body), `GET /rare-disease` (UI page)
+- **Input**: `RareCaseInput` — `symptoms` (list[str]), `patient_history` (str), `imaging_findings` (str), `labs` (dict[str, str]), `vitals` (str), `demographics` (dict), `raw_note` (str), `max_hypotheses` (1–10)
+- **Output**: `RareDiseaseReport` — ranked `hypotheses`, `convergence` metadata, `disclaimer`, `generated_at`
+- **Each hypothesis**: `name`, `icd10`, `reasoning`, `matching_features`, `anti_features`, `symptom_coverage`, `evidence_strength`, `coherence_score`, `reward_score`, `evidence_tier` (well-evidenced / some-evidence / speculative), `confirmatory_tests`, `specialist_type`, `urgency` (urgent / elective / low), `pubmed_citations`
+
+#### TTT-Inspired Loop
+Architecture inspired by the `discover` repo (https://github.com/test-time-training/discover — RL at test time).
+Instead of gradient weight updates, adaptation is performed through iterative evidence retrieval + hypothesis expansion:
+
+```
+[Round 0] Symptom Fingerprinting + Ontology Seed Hypotheses (fast, no LLM)
+[Round 1] MedGemma LLM Hypothesis Generation (merged with seeds)
+[TTT Loop — max 3 iterations]
+  ├─ PubMed Zebra Hunt per hypothesis
+  ├─ Reward = 0.40×symptom_coverage + 0.40×evidence_strength + 0.20×coherence
+  ├─ If best_reward ≥ 0.55 → CONVERGE
+  ├─ iter 1 expansion: ontology adjacency for top-3 hypotheses
+  └─ iter 2+ expansion: LLM self-critique for unexplained features
+Output: ranked direction report (top N hypotheses)
+```
+
+#### Ontology Knowledge Base (~60 rare diseases, 8 organ systems)
+Rheumatologic · Metabolic/Genetic · Hematologic · Neurologic · Endocrine · Vascular/Cardiac · Hepatic/GI · Pulmonary
+
+#### Safety
+- Every hunt is logged to the audit trail with symptom count, iterations, and top hypothesis
+- All outputs carry a mandatory disclaimer: directional guidance only, requiring physician validation
+
 ## Safety Constraints
 
 1. **Never diagnose autonomously** - All findings are suggestions requiring physician validation

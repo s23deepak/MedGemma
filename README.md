@@ -189,6 +189,47 @@ RunnableWithMessageHistory           ← persists HumanMessage + AIMessage
 
 ---
 
+### Rare Disease Director — TTT-Inspired Diagnostic Hunt
+
+When common diagnoses have been ruled out, the Rare Disease Director gives clinicians **directional guidance** toward rare disease candidates. Inspired by test-time training (TTT), the system refines its hypothesis set iteratively at inference time using a diagnostic reward function — without any weight updates, making it practical on 8 GB VRAM.
+
+The entry point is `/rare-disease`. A clinician enters symptoms, labs, imaging findings, and an optional history note; the director returns a ranked list of rare disease candidates with evidence tiers, matching/anti-features, confirmatory tests, specialist referral type, and urgency.
+
+```
+[Round 0] Symptom Fingerprinting + Ontology Seed Hypotheses (fast, no LLM)
+          ─ curated knowledge base of ~60 rare diseases across 8 organ systems
+          ─ ≥2 trigger-symptom matches → seed hypothesis
+                │
+                ▼
+[Round 1] MedGemma LLM Hypothesis Generation
+          ─ structured JSON prompt for 5 rare disease candidates with reasoning
+          ─ merged with ontology seeds (dedup by name)
+                │
+                ▼
+[TTT Loop — max 3 iterations]
+  ├─ PubMed Zebra Hunt per hypothesis (reuses PubMedSynthesisAgent.case_matcher)
+  ├─ Reward = 0.40 × symptom_coverage
+  │         + 0.40 × evidence_strength
+  │         + 0.20 × coherence_score
+  ├─ best_reward ≥ 0.55 → CONVERGE (early exit)
+  ├─ iter 1 expansion: ontology adjacency + mimics for top-3 hypotheses
+  └─ iter 2+ expansion: LLM self-critique for still-unexplained features
+                │
+                ▼
+Direction Report (top N hypotheses, ranked by reward)
+  ─ Evidence tier: well-evidenced / some-evidence / speculative
+  ─ Matching features (✓) and anti-features (✗ absent high-weight findings)
+  ─ Confirmatory tests, specialist referral, urgency
+  ─ TTT convergence metadata (iterations used, final reward)
+  ─ Mandatory disclaimer: directional guidance, requires physician validation
+```
+
+Ontology coverage spans 8 organ systems: Rheumatologic · Metabolic/Genetic · Hematologic · Neurologic · Endocrine · Vascular/Cardiac · Hepatic/GI · Pulmonary. Representative entries include HLH, Wilson's Disease, Antiphospholipid Syndrome, MELAS, TTP, Takayasu Arteritis, POEMS Syndrome, and ~55 others.
+
+Every hunt is logged to the audit trail with symptom count, iteration count, and the top hypothesis name.
+
+---
+
 ### Additional Capabilities
 
 | Capability | Description |
@@ -231,6 +272,15 @@ LangChain Simulation:
   ChatPromptTemplate + MessagesPlaceholder("history")
         → MedGemmaRunnable (Runnable)
         → RunnableWithMessageHistory (InMemoryChatMessageHistory keyed by session_id)
+
+Rare Disease Director (TTT-inspired):
+  Symptom Fingerprinting → Ontology Seeds (no LLM)
+        → [optional] MedGemma LLM Hypothesis Generation
+        → TTT Loop (max 3 iter):
+             PubMed Zebra Hunt per hypothesis
+             Reward = 0.40×coverage + 0.40×evidence + 0.20×coherence
+             reward ≥ 0.55 → converge | else expand (adjacency → self-critique)
+        → RareDiseaseReport (ranked, evidence-tiered, with convergence metadata)
 ```
 
 ## Project Structure
@@ -257,6 +307,7 @@ LangChain Simulation:
 │   ├── monitoring/         # Performance profiling
 │   ├── referral/           # Specialist referral letter generation
 │   ├── simulation/         # Resident simulation engine + LangChain stateful chat chain
+│   ├── rare_disease/       # TTT-inspired rare disease director (ontology, scorer, director)
 │   └── soap/               # SOAP note generation
 ├── static/                 # Frontend UI (app.js, ai_portal.js, styles.css)
 ├── templates/              # Jinja2 HTML templates
