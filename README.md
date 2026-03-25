@@ -34,11 +34,43 @@ A background PubMed synthesis agent runs three searches in parallel: rare-diagno
 
 ---
 
-### Diagnostic Council — Multi-Agent Deliberation
+### Diagnostic Council — Long-Horizon Multi-Agent Deliberation with Stateful Checkpointing
 
-Five independent MedGemma instances reason over the same case in parallel via a LangGraph fan-out graph. Each agent produces a ranked differential with confidence scores. The orchestrator aggregates all five into a consensus differential, surfacing where the agents agree and where they diverge.
+**Five independent MedGemma instances** reason over the same case in parallel via a LangGraph fan-out graph. Each produces a ranked differential with confidence scores. The orchestrator aggregates all five into consensus, surfacing agreement and divergence.
 
-When the consensus is weak or a rare diagnosis appears in the PubMed hunt, the council enters a **Deep Dive** second round: the PubMed findings are injected as context and the agents deliberate again, updating or defending their original positions.
+#### Key Features
+
+**Phase 1: Core Long-Horizon Infrastructure** ✓
+- **Persistent Checkpointing**: State snapshots after retrieve_context → r1_consensus → run_pubmed → r2_consensus; resumption branches from latest checkpoint preserving original audit trail
+- **Firestore Persistence**: All workflows, checkpoints, decision trails, and evidence cached per workflow_id with branching support (re_deliberate_v1, re_deliberate_v2, etc.)
+- **Decision Trails**: Full audit logging of diagnostic evolution—every opinion, consensus update, evidence source, and physician action recorded immutably
+
+**Phase 2: Specialist Sub-Councils Routing** ✓
+- **Confidence-Triggered Routing**: Weak consensus (confidence < 60%) or split opinions automatically invoke 5 specialist councils (Cardiology, Infectious Disease, Neurology, Hematology, Rheumatology) in parallel
+- **Send API Parallelization**: Specialists run concurrently; consensus merged with main deliberation when agreement detected
+- **Specialist Alignment Tracking**: Decision trail captures which specialists agreed/disagreed with final diagnosis
+
+**Phase 3: Re-Deliberation Orchestration** ✓
+- **Automatic Triggers**: New EHR observations, PubMed rare-disease findings, or manual physician requests branch re-deliberation from latest checkpoint
+- **Manual Physician Request**: Physicians can request re-deliberation on specific cases with optional evidence injection
+- **Low-Confidence Watchdog**: Automatic monitoring escalates weak-consensus cases for re-deliberation after 24h or on new clinical events
+- **Escalation Rules**: Weak consensus + urgent/emergent → CRITICAL flag; split consensus → WARNING + specialist referral; rare diagnosis without confirmation → physician review required
+
+**Phase 4: Evidence Aggregation & Decision Analysis** ✓
+- **Multi-Source Evidence**: 11 evidence types (PubMed, EHR, specialists, clinical trials, etc.) with GRADE-based reliability tiers (HIGH / MODERATE / LOW / VERY_LOW)
+- **Bias Scoring**: 0–1 bias penalty applied to evidence quality composite; evidence recommendations auto-generated
+- **Full-Text Search Queries**: DecisionTrailQuery supports complex filtering on evidence type, confidence, specialist alignment, and timestamp ranges
+- **Diagnostic Narrative Generation**: Automated consensus evolution summary with timeline visualization
+
+**Phase 5: Physician Override & Closed-Loop Learning** ✓
+- **Override Capture**: 7 override types tracked (diagnosis changed, confidence adjusted, specialist added, escalation dismissed/triggered, investigation added/skipped)
+- **Specialist Feedback Loop**: 6 feedback types (correct, incorrect, incomplete, over-referred, helpful, redundant) with accuracy scores (0.0–1.0)
+- **Automatic Routing Tuning**: RoutingFeedbackLearner analyzes specialist accuracy; recommends threshold adjustments (increase, decrease, auto-route, remove) when confidence > 0.6
+- **Learning Dashboard**: Case outcome metrics, system-level accuracy, specialist leaderboards, and escalation trends queryable at any time
+
+#### Workflow Graph
+
+When consensus is weak or rare diagnosis appears in the PubMed hunt, the council enters a **Deep Dive** second round: PubMed findings injected as context; agents deliberate again, updating or defending positions. If consensus remains weak, specialist councils are invoked. All decisions persist with full evidence trail.
 
 ```mermaid
 flowchart TD
@@ -57,27 +89,40 @@ flowchart TD
     F1 -->|idx = 1| O2
     F1 -->|idx = N-1| ON
 
-    O1 & O2 & ON --> C["calculate_consensus\naggregate differential · confidence · strength"]
+    O1 & O2 & ON --> C["calculate_consensus\n + checkpoint save\naggregate differential · confidence · strength"]
 
-    C --> P["run_pubmed\nZebra Hunt — rare disease case reports"]
+    C --> RT1{confidence < 60%\nor split?}
+    RT1 -->|yes| SPEC["route_to_specialists\nParallel Send × 5\nCardiology, ID, Neuro, Heme, Rheum"]
+    RT1 -->|no| P["run_pubmed\nZebra Hunt — rare disease case reports\n+ checkpoint save"]
+
+    SPEC --> MSPEC["merge_specialist_consensus\nBoost confidence if agreement"]
+    MSPEC --> P
 
     P --> RT{route_after_pubmed}
-    RT -->|"standard mode\nor no rare dx found"| E1([END])
+    RT -->|"standard mode\nor no rare dx found"| ESCAL{escalation\nrules?}
     RT -->|"iterative mode\n+ rare diagnoses found"| F2{"Send × N\nDeep Dive"}
 
-    subgraph R2 ["Round 2 — Deep Dive with PubMed Evidence"]
-        P1["Agent 1\n+ rare evidence injected"]
-        P2["Agent 2\n+ rare evidence injected"]
-        PN["Agent N\n+ rare evidence injected"]
-    end
+    F2 -->|with PubMed evidence| P1["Agent 1"]
+    F2 -->|with PubMed evidence| P2["Agent 2"]
+    F2 -->|with PubMed evidence| PN["Agent N"]
 
-    F2 -->|idx = 0| P1
-    F2 -->|idx = 1| P2
-    F2 -->|idx = N-1| PN
+    P1 & P2 & PN --> C2["calculate_r2_consensus\n + checkpoint save"]
+    C2 --> ESCAL
 
-    P1 & P2 & PN --> C2["calculate_r2_consensus"]
-    C2 --> E2([END])
+    ESCAL -->|weak consensus| FLG1["FLAG: Weak Consensus\nPhysician Review Required"]
+    ESCAL -->|split + urgent| FLG2["CRITICAL: Split Opinion\n+ Urgent Context"]
+    ESCAL -->|rare unconfirmed| FLG3["FLAG: Rare Diagnosis\nRequires Confirmation"]
+    ESCAL -->|standard| E1([END — Persist to Firestore])
+
+    FLG1 & FLG2 & FLG3 --> E2([END — Escalation & Decision Trail Logged])
 ```
+
+#### Stateful Integration
+
+1. **Checkpoint Storage**: Firestore saves full workflow state after consensus calculation (node: calculate_consensus, r2_consensus); enables instant resumption when new evidence arrives
+2. **Re-Deliberation Branching**: New deliberations branch from checkpoint with unique branch_name (re_deliberate_v1, re_deliberate_v2); original audit trail remains immutable
+3. **Decision Trail Recording**: Every round, specialist invocation, evidence source, and override recorded with full timestamp + physician context
+4. **Escalation Dispatch**: Rules engine auto-flags weak consensus, split opinions, or rare-unconfirmed diagnoses; blocks closure pending explicit physician acknowledgment
 
 <img src="write-up images/Diagnostic Council prompt.png" width="100%" alt="Diagnostic Council — case input"/>
 
