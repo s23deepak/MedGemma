@@ -690,6 +690,79 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
             discussion_summary=summary,
         )
 
+    def initiate_long_horizon_workflow(
+        self,
+        symptoms: list[str],
+        patient_id: str,
+        created_by: str,
+        patient_history: str = "",
+        imaging_findings: str = "",
+        vitals: dict | None = None,
+        raw_note: str = "",
+    ) -> str:
+        """
+        Initiate a long-horizon workflow for continuous monitoring and re-deliberation.
+
+        Args:
+            symptoms: List of presenting symptoms
+            patient_id: Patient identifier
+            created_by: User/physician initiating the workflow
+            patient_history: Relevant patient history
+            imaging_findings: Imaging results if available
+            vitals: Current vital signs
+            raw_note: Full unstructured clinical note (optional)
+
+        Returns:
+            Workflow ID for future reference and re-deliberations
+        """
+        from .workflow_engine import get_workflow_engine
+        from .long_horizon_state import extend_council_state_to_long_horizon
+
+        engine = get_workflow_engine()
+
+        # Create initial council state
+        council_state = {
+            "case_info": {
+                "symptoms": symptoms,
+                "patient_history": patient_history,
+                "imaging_findings": imaging_findings,
+                "vitals": vitals or {},
+            },
+            "num_rollouts": self.num_rollouts,
+            "mode": "iterative",
+            "raw_note": raw_note,
+            "retrieved_context": "",
+            "opinions": [],
+            "consensus_diagnosis": None,
+            "consensus_strength": "weak",
+            "consensus_confidence": 0.0,
+            "discussion_summary": "",
+            "minority_challenge": "",
+            "pubmed_insights": {},
+            "rare_diagnoses": [],
+            "r2_opinions": [],
+            "r2_consensus_diagnosis": None,
+            "r2_consensus_strength": "weak",
+            "r2_consensus_confidence": 0.0,
+            "r2_discussion_summary": "",
+        }
+
+        # Initiate workflow
+        workflow_id = engine.initiate_workflow(
+            council_state=council_state,
+            patient_id=patient_id,
+            created_by=created_by,
+        )
+
+        return workflow_id
+
+    def get_workflow_status(self, workflow_id: str) -> dict:
+        """Get status and summary of a long-horizon workflow."""
+        from .workflow_engine import get_workflow_engine
+
+        engine = get_workflow_engine()
+        return engine.summarize_workflow(workflow_id)
+
     def get_deliberation_history(self) -> list[dict]:
         """Get all past deliberations."""
         return [d.to_dict() for d in self.deliberation_history]

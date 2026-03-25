@@ -1220,6 +1220,185 @@ async def get_council_history():
     return {"deliberations": council.get_deliberation_history()}
 
 
+# ──────────────────────────────────────────────────────────────────────────────────────
+# Long-Horizon Diagnostic Council API Endpoints (Phase 1)
+# ──────────────────────────────────────────────────────────────────────────────────────
+
+@app.post("/api/council/initiate-workflow")
+@track_perf("council_workflow_init")
+async def initiate_long_horizon_workflow(request: Request):
+    """
+    Initiate a long-horizon diagnostic council workflow with checkpointing.
+
+    Returns workflow_id for future reference and re-deliberations.
+    """
+    from src.council import get_diagnostic_council
+
+    data = await request.json()
+    symptoms = data.get("symptoms", [])
+    patient_id = data.get("patient_id", "")
+    created_by = data.get("created_by", "system")
+    patient_history = data.get("patient_history", "")
+    imaging_findings = data.get("imaging_findings", "")
+    vitals = data.get("vitals")
+    raw_note = data.get("raw_note", "")
+    num_rollouts = min(int(data.get("num_rollouts", 5)), 10)
+
+    if not symptoms or not patient_id:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            {"error": "symptoms and patient_id are required"},
+            status_code=400
+        )
+
+    council = get_diagnostic_council(agent=agent, num_rollouts=num_rollouts, pubmed_agent=pubmed_agent)
+    workflow_id = council.initiate_long_horizon_workflow(
+        symptoms=symptoms,
+        patient_id=patient_id,
+        created_by=created_by,
+        patient_history=patient_history,
+        imaging_findings=imaging_findings,
+        vitals=vitals,
+        raw_note=raw_note,
+    )
+
+    if audit_logger:
+        audit_logger.log("LONG_HORIZON_WORKFLOW", "initiate",
+                        details={"workflow_id": workflow_id, "patient_id": patient_id})
+
+    return {
+        "workflow_id": workflow_id,
+        "status": "initiated",
+        "message": f"Workflow {workflow_id} initiated for long-horizon monitoring"
+    }
+
+
+@app.get("/api/council/workflow/{workflow_id}")
+@track_perf("council_workflow_status")
+async def get_workflow_status(workflow_id: str):
+    """Fetch workflow status, checkpoint count, and current decision trail."""
+    from src.council import get_diagnostic_council
+    from src.council.workflow_store import get_workflow_store
+
+    council = get_diagnostic_council(agent=agent, pubmed_agent=pubmed_agent)
+    status = council.get_workflow_status(workflow_id)
+
+    if audit_logger:
+        audit_logger.log("LONG_HORIZON_WORKFLOW", "status_query",
+                        details={"workflow_id": workflow_id})
+
+    return status
+
+
+@app.post("/api/council/workflow/{workflow_id}/trigger-redlib")
+@track_perf("council_workflow_redlib")
+async def trigger_re_deliberation(workflow_id: str, request: Request):
+    """
+    Trigger a re-deliberation based on new evidence (labs, imaging, vitals).
+    Creates a new branch under the same workflow_id.
+    """
+    from src.council.workflow_engine import get_workflow_engine
+    from src.council import get_diagnostic_council
+
+    data = await request.json()
+    new_case_info = data.get("case_info", {})  # {symptoms, labs, vitals, imaging_findings}
+    triggered_by = data.get("triggered_by", "system")  # "auto" or "physician_request"
+
+    try:
+        engine = get_workflow_engine()
+        new_workflow_id, resumed_state = engine.initiate_re_deliberation(
+            workflow_id=workflow_id,
+            new_case_info=new_case_info,
+            triggered_by_escalation=(triggered_by == "escalation")
+        )
+
+        if audit_logger:
+            audit_logger.log("LONG_HORIZON_WORKFLOW", "redlib_triggered",
+                           details={"workflow_id": workflow_id, "new_workflow_id": new_workflow_id})
+
+        return {
+            "new_workflow_id": new_workflow_id,
+            "status": "re_deliberation_initiated",
+            "message": f"Re-deliberation initiated as {new_workflow_id}",
+            "previous_consensus": resumed_state.get("consensus_diagnosis"),
+            "case_info_merged": bool(new_case_info)
+        }
+    except ValueError as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": str(e)}, status_code=404)
+
+
+@app.get("/api/council/workflow/{workflow_id}/decision-trail")
+@track_perf("council_workflow_trail")
+async def get_decision_trail(workflow_id: str):
+    """Fetch the complete decision audit trail for a workflow."""
+    from src.council.workflow_store import get_workflow_store
+
+    store = get_workflow_store()
+    trail = store.get_decision_trail(workflow_id)
+
+    if audit_logger:
+        audit_logger.log("LONG_HORIZON_WORKFLOW", "trail_query",
+                        details={"workflow_id": workflow_id, "event_count": len(trail)})
+
+    return {
+        "workflow_id": workflow_id,
+        "decision_events": trail,
+        "event_count": len(trail)
+    }
+
+
+@app.post("/api/council/workflow/{workflow_id}/physician-override")
+@track_perf("council_workflow_override")
+async def physician_override(workflow_id: str, request: Request):
+    """
+    Record physician override of diagnostic consensus.
+    Physician can exclude, promote, or accept diagnoses.
+    """
+    from src.council.long_horizon_state import HumanOverride
+    from src.council.workflow_store import get_workflow_store
+    from datetime import datetime
+
+    data = await request.json()
+    physician_id = data.get("physician_id", "unknown")
+    action = data.get("action", "accept")  # exclude, promote, request_reeval, accept
+    target_diagnosis = data.get("target_diagnosis", None)
+    rationale = data.get("rationale", "")
+
+    try:
+        store = get_workflow_store()
+        workshop = store.get_workflow(workflow_id)
+
+        if not workshop:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": f"Workflow {workflow_id} not found"}, status_code=404)
+
+        # Log override (in full implementation, would update state and trigger re-eval)
+        if audit_logger:
+            audit_logger.log("LONG_HORIZON_WORKFLOW", "physician_override",
+                           details={
+                               "workflow_id": workflow_id,
+                               "physician_id": physician_id,
+                               "action": action,
+                               "target_diagnosis": target_diagnosis
+                           })
+
+        return {
+            "status": "override_recorded",
+            "workflow_id": workflow_id,
+            "message": f"Physician override recorded: {action}",
+            "override_details": {
+                "physician_id": physician_id,
+                "action": action,
+                "target_diagnosis": target_diagnosis,
+                "rationale": rationale
+            }
+        }
+    except Exception as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # Patient Portal API endpoints
 @app.get("/api/portal/{patient_id}/summary")
 async def get_portal_summary(patient_id: str):

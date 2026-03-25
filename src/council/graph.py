@@ -467,3 +467,24 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
     g.add_edge("calculate_r2_consensus", END)
 
     return g.compile()
+
+
+# ── Long-Horizon Graph Building (with checkpoint support) ───────────────────────
+
+def build_long_horizon_council_graph(agent=None, pubmed_agent=None):
+    """
+    Build the council graph for long-horizon workflows with checkpoint support.
+
+    This returns the same graph as build_council_graph(), but is available as a
+    separate entry point for long-horizon workflows. The checkpointing is handled
+    by WorkflowEngine wrappers, not by the graph itself.
+
+    Args:
+        agent: MedGemma agent for generating opinions
+        pubmed_agent: PubMedSynthesisAgent for literature backing
+
+    Returns:
+        Compiled LangGraph StateGraph (same as standard graph)
+    """
+    # Reuse the standard graph builder
+    return build_council_graph(agent=agent, pubmed_agent=pubmed_agent)
