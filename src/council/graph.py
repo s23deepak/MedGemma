@@ -21,6 +21,7 @@ Key design choices:
 from __future__ import annotations
 
 import json
+import logging
 import operator
 import random
 import re
@@ -38,6 +39,12 @@ from .council import (
     _synth_discussion,
 )
 from .rag import compress_note, compress_note_negation_aware
+from .specialist_router import get_specialist_router
+from .specialist_councils import get_specialist_council
+from .decision_trail import get_decision_trail_recorder
+
+
+logger = logging.getLogger(__name__)
 
 
 # ── State schema ──────────────────────────────────────────────────────────────
@@ -63,6 +70,12 @@ class CouncilState(TypedDict):
     consensus_confidence: float
     discussion_summary: str
     minority_challenge: str          # counter-factual prompt from dissenting opinions
+
+    # ── Specialist sub-councils ───────────────────────────────────────────────
+    should_consult_specialists: bool  # routing decision after R1 consensus
+    specialist_findings: Annotated[list[dict], operator.add]  # SpecialistDeliberation results
+    specialist_merged_diagnosis: str | None  # consensus after merging specialists
+    specialist_merged_confidence: float
 
     # ── PubMed results ────────────────────────────────────────────────────────
     pubmed_insights: dict
@@ -146,7 +159,14 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
 
     def initialize(state: CouncilState) -> dict:
         """Ensure accumulators start empty (LangGraph merges via operator.add)."""
-        return {"opinions": [], "r2_opinions": []}
+        return {
+            "opinions": [],
+            "r2_opinions": [],
+            "specialist_findings": [],
+            "should_consult_specialists": False,
+            "specialist_merged_diagnosis": None,
+            "specialist_merged_confidence": 0.0,
+        }
 
     def retrieve_context(state: CouncilState) -> dict:
         """
@@ -433,6 +453,188 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
             "r2_discussion_summary": discussion,
         }
 
+    # ── Specialist sub-councils ───────────────────────────────────────────────
+
+    def route_to_specialists(state: CouncilState) -> list[Send] | str:
+        """
+        Decide whether to invoke specialist sub-councils.
+
+        Triggers:
+        - Confidence < 60% AND dissenting opinions exist
+        - Weak consensus strength
+        - Split consensus
+
+        Returns list[Send] if specialists needed, else "run_pubmed" to skip.
+        """
+        router = get_specialist_router()
+
+        # Calculate consensus strength and dissent
+        consensus_diag = state["consensus_diagnosis"]
+        consensus_conf = state["consensus_confidence"]
+        consensus_strength = state["consensus_strength"]
+
+        # Count dissenting opinions
+        num_dissenting = 0
+        if consensus_diag and state.get("opinions"):
+            num_dissenting = sum(
+                1 for op in state["opinions"]
+                if op.get("diagnosis", "").lower() != consensus_diag.lower()
+            )
+
+        # Determine if specialist referral is needed
+        should_refer = router.should_refer_to_specialist(
+            consensus_diagnosis=consensus_diag,
+            consensus_confidence=consensus_conf,
+            consensus_strength=consensus_strength,
+            num_dissenting=num_dissenting,
+            total_opinions=len(state.get("opinions", [])),
+        )
+
+        if not should_refer:
+            return "run_pubmed"
+
+        # Recommend specific specialists
+        specialists = router.recommend_specialists(
+            consensus_diagnosis=consensus_diag,
+            symptoms=state["case_info"].get("symptoms", []),
+            consensus_strength=consensus_strength,
+            num_dissenting=num_dissenting,
+        )
+
+        # Fan-out specialist invocations
+        sends = [
+            Send(
+                "invoke_specialist",
+                {**state, "_specialist_name": spec, "should_consult_specialists": True},
+            )
+            for spec in specialists
+        ]
+
+        logger.info(f"Routing to {len(specialists)} specialist council(s): {specialists}")
+        return sends if sends else "run_pubmed"
+
+    def invoke_specialist(state: CouncilState) -> dict:
+        """
+        Invoke a single specialist sub-council.
+
+        The _specialist_name is injected by Send().
+        """
+        specialist_name: str = state["_specialist_name"]  # type: ignore[typeddict-item]
+        case_info = state["case_info"]
+
+        try:
+            council = get_specialist_council(specialist_name, agent=agent)
+            deliberation = council.deliberate(case_info)
+
+            # Log specialist finding to decision trail if available
+            if state.get("workflow_id"):
+                recorder = get_decision_trail_recorder(state["workflow_id"])
+                aligned = (
+                    deliberation.consensus_diagnosis and
+                    state.get("consensus_diagnosis") and
+                    deliberation.consensus_diagnosis.lower() ==
+                    state["consensus_diagnosis"].lower()
+                )
+                recorder.record_specialist_consultation(
+                    specialty=specialist_name,
+                    specialist_consensus=deliberation.consensus_diagnosis,
+                    specialist_confidence=deliberation.consensus_confidence,
+                    aligned_with_main=aligned,
+                )
+
+            # Convert deliberation to dict for accumulation
+            result = {
+                "specialist": specialist_name,
+                "consensus_diagnosis": deliberation.consensus_diagnosis,
+                "consensus_confidence": deliberation.consensus_confidence,
+                "consensus_reasoning": deliberation.consensus_reasoning,
+                "opinions": [
+                    {
+                        "opinion_id": op.opinion_id,
+                        "diagnosis": op.diagnosis,
+                        "confidence": op.confidence,
+                        "reasoning": op.reasoning,
+                    }
+                    for op in deliberation.opinions
+                ],
+                "specialist_referral_indicated": deliberation.specialist_referral_indicated,
+            }
+
+            return {"specialist_findings": [result]}
+
+        except Exception as e:
+            logger.error(f"Specialist {specialist_name} invocation failed: {e}")
+            return {
+                "specialist_findings": [
+                    {
+                        "specialist": specialist_name,
+                        "consensus_diagnosis": None,
+                        "consensus_confidence": 0.0,
+                        "consensus_reasoning": f"Error: {str(e)}",
+                        "specialist_referral_indicated": False,
+                    }
+                ]
+            }
+
+    def merge_specialist_consensus(state: CouncilState) -> dict:
+        """
+        Merge specialist findings with main council consensus.
+
+        Strategy:
+        - If any specialist agrees strongly with main council → boost confidence
+        - If specialists diverge → flag for review but keep main consensus
+        - Average specialist confidence with main consensus
+        """
+        specialist_findings = state.get("specialist_findings", [])
+        if not specialist_findings:
+            return {
+                "should_consult_specialists": False,
+                "specialist_merged_diagnosis": state.get("consensus_diagnosis"),
+                "specialist_merged_confidence": state.get("consensus_confidence", 0.0),
+            }
+
+        main_diagnosis = state["consensus_diagnosis"]
+        main_confidence = state["consensus_confidence"]
+
+        # Count specialist agreement with main consensus
+        agreeing_specialists = 0
+        disagreeing_specialists = 0
+        specialist_confidences = []
+
+        for finding in specialist_findings:
+            spec_diagnosis = finding.get("consensus_diagnosis")
+            spec_confidence = finding.get("consensus_confidence", 0.0)
+            specialist_confidences.append(spec_confidence)
+
+            if main_diagnosis and spec_diagnosis:
+                if spec_diagnosis.lower() == main_diagnosis.lower():
+                    agreeing_specialists += 1
+                else:
+                    disagreeing_specialists += 1
+
+        # Merge strategy: boost confidence if specialists agree
+        merged_confidence = main_confidence
+        if specialist_confidences:
+            # If specialists mostly agree with main council, boost confidence
+            if agreeing_specialists > disagreeing_specialists:
+                avg_specialist_conf = sum(specialist_confidences) / len(specialist_confidences)
+                merged_confidence = min(
+                    1.0,
+                    (main_confidence + avg_specialist_conf) / 2 * 1.1,
+                )
+            # If significant disagreement, keep main confidence but flag it
+            elif disagreeing_specialists > 0:
+                logger.warning(
+                    f"Specialist divergence: {disagreeing_specialists} specialists "
+                    f"disagree with main consensus '{main_diagnosis}'"
+                )
+
+        return {
+            "should_consult_specialists": True,
+            "specialist_merged_diagnosis": main_diagnosis,
+            "specialist_merged_confidence": merged_confidence,
+        }
+
     # ── Build and compile graph ───────────────────────────────────────────────
 
     g = StateGraph(CouncilState)
@@ -444,6 +646,9 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
     g.add_node("generate_r1_opinion", _opinion_node)
     g.add_node("generate_r2_opinion", _opinion_node)
     g.add_node("calculate_consensus", calculate_consensus)
+    # Specialist sub-councils
+    g.add_node("invoke_specialist", invoke_specialist)
+    g.add_node("merge_specialist_consensus", merge_specialist_consensus)
     g.add_node("run_pubmed", run_pubmed)
     g.add_node("calculate_r2_consensus", calculate_r2_consensus)
 
@@ -461,7 +666,12 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
     g.add_edge("initialize", "retrieve_context")
     g.add_conditional_edges("retrieve_context", fan_out_r1)
     g.add_edge("generate_r1_opinion", "calculate_consensus")
-    g.add_edge("calculate_consensus", "run_pubmed")
+    # Specialist routing decision after Round 1 consensus
+    g.add_conditional_edges("calculate_consensus", route_to_specialists)
+    # Specialist sub-council chain
+    g.add_edge("invoke_specialist", "merge_specialist_consensus")
+    g.add_edge("merge_specialist_consensus", "run_pubmed")
+    # PubMed → iterative Round 2 or END
     g.add_conditional_edges("run_pubmed", route_after_pubmed)
     g.add_edge("generate_r2_opinion", "calculate_r2_consensus")
     g.add_edge("calculate_r2_consensus", END)
