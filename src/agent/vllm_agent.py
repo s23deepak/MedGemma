@@ -159,7 +159,46 @@ Possible diagnoses prioritized by clinical correlation.
 ## 5. RECOMMENDATIONS
 Next steps for correlated findings and follow-up for incidental findings.
 
-Flag any urgent findings with ⚠️."""
+Flag any urgent findings with ⚠️.
+
+## 6. STRUCTURED FINDINGS FOR LOCALIZATION (JSON)
+At the end of your response, provide findings with normalized bounding box coordinates in the following JSON format:
+```json
+{
+  "findings": [
+    {
+      "description": "[brief finding name]",
+      "normalized_box": {
+        "x": 0.0,
+        "y": 0.0,
+        "w": 1.0,
+        "h": 1.0
+      },
+      "confidence": 0.85,
+      "significance": "CRITICAL|SIGNIFICANT|INCIDENTAL"
+    }
+  ]
+}
+```
+Where:
+- normalized_box: x,y are top-left coordinates (0-1 scale), w,h are width/height (0-1 scale). 0=left/top, 1=right/bottom.
+- confidence: 0.0-1.0 score of how certain you are about this finding
+- significance: CRITICAL (life-threatening), SIGNIFICANT (needs action), or INCIDENTAL (found but not related to complaint)
+
+Example for a chest X-ray with right lower lobe opacity:
+```json
+{
+  "findings": [
+    {
+      "description": "Right lower lobe opacity",
+      "normalized_box": {"x": 0.55, "y": 0.45, "w": 0.35, "h": 0.40},
+      "confidence": 0.88,
+      "significance": "SIGNIFICANT"
+    }
+  ]
+}
+```
+"""
         
         # Sampling parameters for medical analysis
         sampling_params = SamplingParams(

@@ -87,9 +87,18 @@ flowchart TD
 
 ---
 
-### AI Chat Portal — Physician Queries with Image Annotation
+### AI Chat Portal — Physician Queries with Image Annotation & Zoom
 
 Physicians can ask free-form questions, attach medical images, and draw bounding boxes to direct MedGemma's attention to a specific region of interest. Voice input is supported alongside text. Based on the message intent, a PubMed evidence agent dispatches automatically and appends supporting literature alongside MedGemma's response.
+
+**Image Viewer Features:**
+- **Zoom Controls**: Zoom in/out with buttons (+/−), mouse wheel scroll, or keyboard shortcuts (+, −, R for reset)
+- **Zoom Range**: 50% to 300% magnification
+- **Pan Support**: Drag the image to explore zoomed regions
+- **Annotation Preservation**: User-drawn (amber) and AI-generated (red) annotations remain perfectly aligned at any zoom level
+- **Real-time Updates**: All annotations stay synchronized during zoom and pan operations
+
+Annotations are stored in normalized coordinates [0-1], making them zoom-independent — the zoom feature is purely a visual presentation layer that doesn't affect annotation accuracy or alignment.
 
 <img src="write-up images/Ai-chat portal Question.png" width="100%" alt="AI Chat Portal — question with image"/>
 
@@ -234,6 +243,8 @@ Every hunt is logged to the audit trail with symptom count, iteration count, and
 
 | Capability | Description |
 |---|---|
+| **AI-Generated Bounding Boxes** | MedGemma automatically generates red dashed bounding boxes to localize detected findings (e.g., pneumonia, opacity, fracture) with confidence scores; user-drawn boxes (amber) remain overlaid for comparison |
+| **Image Zoom & Pan** | 50–300% zoom via buttons, mouse wheel, or keyboard (+/−/R); pan via click-and-drag when zoomed; all annotations stay perfectly aligned at any magnification |
 | **Patient Portal** | Patient-facing Q&A with emergency detection and safety guardrails |
 | **Patient Memory (Mem0)** | Persistent cross-encounter memory — MedGemma recalls prior visits |
 | **Discharge Planner** | Patient-friendly discharge summaries with LACE readmission risk scoring (HIGH / MEDIUM / LOW) |

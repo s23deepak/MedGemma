@@ -28,13 +28,24 @@ const portalState = {
     imageName: '',
 
     // Annotations
-    annotations: [],            // [{id, x, y, w, h, label}]  — normalised 0-1
+    annotations: [],            // [{id, x, y, w, h, label}]  — normalised 0-1 (user-drawn)
+    aiAnnotations: [],          // [{id, x, y, w, h, label, source, confidence}] — normalised 0-1 (AI-generated)
     annotationCounter: 0,
 
     // Canvas drawing state
     drawTool: 'view',           // 'view' | 'annotate'
     isDrawing: false,
     drawStart: null,
+
+    // Zoom & pan state (NEW)
+    zoomLevel: 1.0,             // 1.0 = 100% (fitted), 1.5 = 150%, etc.
+    minZoom: 0.5,               // 50% minimum
+    maxZoom: 3.0,               // 300% maximum
+    zoomStep: 0.1,              // 10% increment per button click
+    panX: 0,                    // Pan offset in pixels (X axis)
+    panY: 0,                    // Pan offset in pixels (Y axis)
+    isPanning: false,           // Currently dragging to pan?
+    panStart: null,             // {x, y} where pan drag started
 
     // Chat
     chatHistory: [],            // [{role, content, imageDataUrl?, annotations?}]
@@ -64,6 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadPatients();
     setupImageDragDrop();
     setupCanvas();
+    setupZoomMouseWheel();  // NEW
 });
 
 // ── Mode switch ───────────────────────────────────────────────────────────────
@@ -311,6 +323,74 @@ function clearImage() {
     renderAnnotationList();
 }
 
+// ── Zoom & Pan Functions (NEW) ────────────────────────────────────────────────
+
+function zoomIn() {
+    portalState.zoomLevel = Math.min(
+        portalState.maxZoom,
+        portalState.zoomLevel + portalState.zoomStep
+    );
+    applyZoom();
+}
+
+function zoomOut() {
+    portalState.zoomLevel = Math.max(
+        portalState.minZoom,
+        portalState.zoomLevel - portalState.zoomStep
+    );
+    applyZoom();
+}
+
+function zoomReset() {
+    portalState.zoomLevel = 1.0;
+    portalState.panX = 0;
+    portalState.panY = 0;
+    applyZoom();
+}
+
+function applyZoom() {
+    const container = document.getElementById('zoomTransformContainer');
+    const display = document.getElementById('zoomDisplay');
+
+    if (!container) return;
+
+    // Apply CSS transform (scale + translate)
+    const scaleValue = portalState.zoomLevel;
+    const translateX = portalState.panX;
+    const translateY = portalState.panY;
+    container.style.transform =
+        `translate(${translateX}px, ${translateY}px) scale(${scaleValue})`;
+
+    // Update display
+    display.textContent = `${Math.round(portalState.zoomLevel * 100)}%`;
+}
+
+function setupZoomMouseWheel() {
+    const container = document.getElementById('canvasWrapper');
+    if (!container) return;
+
+    container.addEventListener('wheel', onMouseWheel, { passive: false });
+}
+
+function onMouseWheel(e) {
+    // Only zoom if image is loaded
+    const img = document.getElementById('baseImage');
+    if (!img || !img.src) return;
+
+    e.preventDefault();  // Prevent page scroll
+
+    // Wheel.deltaY: negative = scroll up (zoom in), positive = scroll down (zoom out)
+    const direction = e.deltaY > 0 ? -1 : 1;
+    const zoomAmount = portalState.zoomStep * direction;
+
+    portalState.zoomLevel = Math.max(
+        portalState.minZoom,
+        Math.min(portalState.maxZoom, portalState.zoomLevel + zoomAmount)
+    );
+
+    applyZoom();
+}
+
 // ── Canvas annotation ─────────────────────────────────────────────────────────
 
 function setupCanvas() {
@@ -319,6 +399,23 @@ function setupCanvas() {
     canvas.addEventListener('mousemove', onCanvasMouseMove);
     canvas.addEventListener('mouseup', onCanvasMouseUp);
     canvas.addEventListener('mouseleave', onCanvasMouseUp);
+
+    // Keyboard shortcuts for zoom (NEW)
+    document.addEventListener('keydown', (e) => {
+        const img = document.getElementById('baseImage');
+        if (!img || !img.src) return;
+
+        if (e.key === '=' || e.key === '+') {
+            e.preventDefault();
+            zoomIn();
+        } else if (e.key === '-' || e.key === '_') {
+            e.preventDefault();
+            zoomOut();
+        } else if (e.key === 'r' || e.key === 'R') {
+            e.preventDefault();
+            zoomReset();
+        }
+    });
 }
 
 function fitCanvasToImage() {
@@ -331,6 +428,13 @@ function fitCanvasToImage() {
     canvas.style.height = img.offsetHeight + 'px';
     canvas.style.top = img.offsetTop + 'px';
     canvas.style.left = img.offsetLeft + 'px';
+
+    // Reset zoom when image loads (NEW)
+    portalState.zoomLevel = 1.0;
+    portalState.panX = 0;
+    portalState.panY = 0;
+    applyZoom();
+
     redrawAnnotations();
 }
 
@@ -355,6 +459,19 @@ function setTool(tool) {
 }
 
 function onCanvasMouseDown(e) {
+    const img = document.getElementById('baseImage');
+    if (!img || !img.src) return;
+
+    // Allow pan in view mode when zoomed, or if middle-mouse clicked
+    if ((portalState.drawTool === 'view' || e.button === 1) && portalState.zoomLevel > 1.0) {
+        portalState.isPanning = true;
+        const pos = canvasPos(e);
+        portalState.panStart = { x: pos.x - portalState.panX, y: pos.y - portalState.panY };
+        e.preventDefault();
+        return;
+    }
+
+    // Original annotation drawing logic
     if (portalState.drawTool !== 'annotate') return;
     portalState.isDrawing = true;
     const pos = canvasPos(e);
@@ -362,6 +479,17 @@ function onCanvasMouseDown(e) {
 }
 
 function onCanvasMouseMove(e) {
+    // Pan logic (NEW)
+    if (portalState.isPanning) {
+        const pos = canvasPos(e);
+        portalState.panX = pos.x - portalState.panStart.x;
+        portalState.panY = pos.y - portalState.panStart.y;
+        applyZoom();
+        e.preventDefault();
+        return;
+    }
+
+    // Original annotation preview drawing
     if (!portalState.isDrawing) return;
     const pos = canvasPos(e);
     const canvas = document.getElementById('annotationCanvas');
@@ -377,6 +505,13 @@ function onCanvasMouseMove(e) {
 }
 
 function onCanvasMouseUp(e) {
+    if (portalState.isPanning) {
+        portalState.isPanning = false;
+        e.preventDefault();
+        return;
+    }
+
+    // Original annotation finalization
     if (!portalState.isDrawing) return;
     portalState.isDrawing = false;
     const pos = canvasPos(e);
@@ -422,31 +557,64 @@ function redrawAnnotations(ctx) {
     if (!ctx) ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Render AI annotations first (so user annotations appear on top)
+    if (portalState.aiAnnotations && portalState.aiAnnotations.length > 0) {
+        portalState.aiAnnotations.forEach(ann => {
+            renderAnnotation(ctx, ann, 'ai');
+        });
+    }
+
+    // Render user annotations
     portalState.annotations.forEach(ann => {
-        const x = ann.x * canvas.width;
-        const y = ann.y * canvas.height;
-        const w = ann.w * canvas.width;
-        const h = ann.h * canvas.height;
-        const lw = Math.max(2, canvas.width / 300);
-
-        ctx.strokeStyle = '#f59e0b';
-        ctx.lineWidth = lw + 1;
-        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-        ctx.strokeRect(x, y, w, h);
-        ctx.lineWidth = lw;
-        ctx.strokeStyle = '#f59e0b';
-        ctx.strokeRect(x, y, w, h);
-
-        // Label
-        ctx.font = `${Math.max(12, canvas.width / 60)}px Inter, sans-serif`;
-        ctx.fillStyle = '#f59e0b';
-        const labelY = y > 20 ? y - 4 : y + h + 16;
-        ctx.fillText(ann.label, x + 2, labelY);
+        renderAnnotation(ctx, ann, 'user');
     });
+}
+
+function renderAnnotation(ctx, ann, source) {
+    const canvas = document.getElementById('annotationCanvas');
+    const x = ann.x * canvas.width;
+    const y = ann.y * canvas.height;
+    const w = ann.w * canvas.width;
+    const h = ann.h * canvas.height;
+    const lw = Math.max(2, canvas.width / 300);
+
+    // Color coding: red for AI, amber for user
+    const color = source === 'ai' ? '#ef4444' : '#f59e0b';
+    const outlineColor = source === 'ai' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(0, 0, 0, 0.5)';
+
+    // Background outline
+    ctx.lineWidth = lw + 1;
+    ctx.strokeStyle = outlineColor;
+    ctx.strokeRect(x, y, w, h);
+
+    // Main stroke
+    ctx.lineWidth = lw;
+    ctx.strokeStyle = color;
+    if (source === 'ai') {
+        ctx.setLineDash([6, 3]);  // Dashed pattern for AI boxes
+    }
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
+
+    // Label with source prefix
+    ctx.font = `${Math.max(12, canvas.width / 60)}px Inter, sans-serif`;
+    ctx.fillStyle = color;
+    const labelY = y > 20 ? y - 4 : y + h + 16;
+    const labelText = source === 'ai' ? `[AI] ${ann.label}` : ann.label;
+    ctx.fillText(labelText, x + 2, labelY);
+
+    // Optional: Add confidence indicator for AI annotations
+    if (source === 'ai' && ann.confidence !== undefined) {
+        ctx.font = `${Math.max(10, canvas.width / 80)}px Inter, sans-serif`;
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.6)';
+        const confidenceY = y + h + 2;
+        ctx.fillText(`${Math.round(ann.confidence * 100)}%`, x + 2, confidenceY);
+    }
 }
 
 function clearAnnotations() {
     portalState.annotations = [];
+    portalState.aiAnnotations = [];
     redrawAnnotations();
     renderAnnotationList();
 }
@@ -459,16 +627,38 @@ function removeAnnotation(id) {
 
 function renderAnnotationList() {
     const el = document.getElementById('annotationList');
-    if (portalState.annotations.length === 0) {
-        el.innerHTML = '<span style="color:var(--text-secondary);">No annotations</span>';
-        return;
+    let html = '';
+
+    // User annotations
+    if (portalState.annotations && portalState.annotations.length > 0) {
+        html += '<div style="margin-bottom:0.5rem;">';
+        html += '<div style="color:var(--text-secondary); font-size:0.8rem; font-weight:600;">User Annotations (🟠)</div>';
+        html += portalState.annotations.map(a =>
+            `<span class="annotation-tag">
+                📐 ${a.label}
+                <button onclick="removeAnnotation(${a.id})" title="Remove">✕</button>
+            </span>`
+        ).join('');
+        html += '</div>';
     }
-    el.innerHTML = portalState.annotations.map(a =>
-        `<span class="annotation-tag">
-            📐 ${a.label}
-            <button onclick="removeAnnotation(${a.id})" title="Remove">✕</button>
-        </span>`
-    ).join('');
+
+    // AI annotations
+    if (portalState.aiAnnotations && portalState.aiAnnotations.length > 0) {
+        html += '<div>';
+        html += '<div style="color:var(--text-secondary); font-size:0.8rem; font-weight:600;">AI Findings (🔴)</div>';
+        html += portalState.aiAnnotations.map(a =>
+            `<span class="annotation-tag" style="background:#fee2e2; color:#991b1b; border: 1px solid #fca5a5;">
+                🤖 ${a.label} ${a.confidence ? `(${Math.round(a.confidence * 100)}%)` : ''}
+            </span>`
+        ).join('');
+        html += '</div>';
+    }
+
+    if (html === '') {
+        html = '<span style="color:var(--text-secondary);">No annotations</span>';
+    }
+
+    el.innerHTML = html;
 }
 
 // ── Attach image to chat ──────────────────────────────────────────────────────
@@ -590,7 +780,16 @@ async function sendMessage() {
             role: 'assistant',
             content: data.response || '(No response)',
             pubmedContext: data.pubmed_context || null,
+            aiAnnotations: data.ai_annotations || [],  // NEW
         };
+
+        // Store AI annotations in portal state for canvas rendering
+        if (data.ai_annotations && data.ai_annotations.length > 0) {
+            portalState.aiAnnotations = data.ai_annotations;
+            redrawAnnotations();
+            showToast(`${data.ai_annotations.length} AI finding(s) detected`);
+        }
+
         portalState.chatHistory.push(assistantMsg);
         renderMessage(assistantMsg);
 
@@ -675,6 +874,11 @@ function renderMessage(msg) {
     }
     if (msg.annotations && msg.annotations.length > 0) {
         extra += `<span class="msg-annotation-badge">📐 ${msg.annotations.length} region(s) annotated</span>`;
+    }
+    if (msg.aiAnnotations && msg.aiAnnotations.length > 0) {
+        extra += `<span class="msg-annotation-badge" style="background:#fee2e2; color:#991b1b; border: 1px solid #fca5a5;">
+                    🤖 ${msg.aiAnnotations.length} AI finding(s)
+                  </span>`;
     }
 
     // PubMed context panel (assistant messages only)

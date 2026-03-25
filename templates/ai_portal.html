@@ -823,6 +823,21 @@
                     <button class="tool-btn active" id="toolView" onclick="setTool('view')">🔍 View</button>
                     <button class="tool-btn" id="toolAnnotate" onclick="setTool('annotate')">📐 Annotate</button>
                     <button class="tool-btn" id="toolClear" onclick="clearAnnotations()">🗑 Clear Boxes</button>
+
+                    <!-- Zoom controls (NEW) -->
+                    <span style="font-size:0.82rem; font-weight:500; color:var(--text-secondary); margin-left:auto;">Zoom:</span>
+                    <button class="tool-btn" id="zoomMinusBtn" onclick="zoomOut()" title="Zoom Out (- or Scroll Down)">
+                        🔍−
+                    </button>
+                    <span id="zoomDisplay" style="min-width:50px; text-align:center; font-weight:600; font-size:0.82rem;">
+                        100%
+                    </span>
+                    <button class="tool-btn" id="zoomPlusBtn" onclick="zoomIn()" title="Zoom In (+ or Scroll Up)">
+                        🔍+
+                    </button>
+                    <button class="tool-btn" id="zoomResetBtn" onclick="zoomReset()" title="Reset to Fitted (R)">
+                        ↺ Reset
+                    </button>
                 </div>
 
                 <!-- Drop / preview area -->
@@ -833,8 +848,10 @@
                         <small>X-ray · CT · MRI · Ultrasound</small>
                     </div>
                     <div class="canvas-wrapper" id="canvasWrapper">
-                        <img id="baseImage" alt="Medical image">
-                        <canvas id="annotationCanvas"></canvas>
+                        <div id="zoomTransformContainer" style="position:absolute; top:0; left:0; transform-origin:top left;">
+                            <img id="baseImage" alt="Medical image">
+                            <canvas id="annotationCanvas"></canvas>
+                        </div>
                         <div class="annotation-hint hidden" id="annotationHint">
                             Draw a box to focus MedGemma on a region
                         </div>

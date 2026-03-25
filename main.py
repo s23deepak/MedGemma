@@ -1549,6 +1549,91 @@ async def health_check():
 # ============================================================
 # AI Chat Portal API endpoints
 # ============================================================
+# AI Portal — AI-Generated Bounding Box Extraction
+# ============================================================
+
+def extract_ai_annotations(response_text: str) -> list[dict]:
+    """
+    Extract bounding box annotations from MedGemma response.
+
+    Looks for a JSON block at the end of the response with findings + coordinates.
+    Returns a list of annotation dicts with normalized [0-1] coordinates.
+    """
+    import re
+    import uuid
+
+    ai_annotations = []
+
+    try:
+        # Look for JSON block in response (typically near end)
+        # Pattern: {...findings...} or ]
+        json_pattern = r'\{[^{}]*"findings"[^{}]*\[[\s\S]*?\]\s*\}'
+        match = re.search(json_pattern, response_text)
+
+        if not match:
+            # Try simpler pattern: any JSON-like structure
+            json_pattern = r'\{\s*"findings"\s*:\s*\[[\s\S]*?\]\s*\}'
+            match = re.search(json_pattern, response_text)
+
+        if match:
+            json_str = match.group(0)
+            parsed = json.loads(json_str)
+
+            if "findings" not in parsed or not isinstance(parsed["findings"], list):
+                return []
+
+            for finding in parsed["findings"]:
+                try:
+                    # Extract and validate bounding box
+                    box = finding.get("normalized_box", {})
+                    if not isinstance(box, dict):
+                        continue
+
+                    x = float(box.get("x", 0.0))
+                    y = float(box.get("y", 0.0))
+                    w = float(box.get("w", 0.1))
+                    h = float(box.get("h", 0.1))
+
+                    # Clamp to [0, 1]
+                    x = max(0.0, min(1.0, x))
+                    y = max(0.0, min(1.0, y))
+                    w = max(0.01, min(1.0, w))
+                    h = max(0.01, min(1.0, h))
+
+                    # Ensure box doesn't exceed image bounds
+                    if x + w > 1.0:
+                        w = 1.0 - x
+                    if y + h > 1.0:
+                        h = 1.0 - y
+
+                    description = finding.get("description", "Finding")
+                    confidence = float(finding.get("confidence", 0.5))
+                    confidence = max(0.0, min(1.0, confidence))
+                    significance = finding.get("significance", "SIGNIFICANT")
+
+                    annotation = {
+                        "id": f"ai-{uuid.uuid4().hex[:8]}",
+                        "x": round(x, 3),
+                        "y": round(y, 3),
+                        "w": round(w, 3),
+                        "h": round(h, 3),
+                        "label": description,
+                        "source": "ai",
+                        "confidence": round(confidence, 2),
+                        "significance": significance,
+                    }
+                    ai_annotations.append(annotation)
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"Failed to parse annotation finding: {e}")
+                    continue
+
+    except json.JSONDecodeError as e:
+        logger.debug(f"AI annotations JSON parse error: {e}")
+    except Exception as e:
+        logger.warning(f"Unexpected error extracting AI annotations: {e}")
+
+    return ai_annotations
+
 
 @app.post("/api/ai-portal/chat")
 async def ai_portal_chat(request: Request):
@@ -1811,7 +1896,15 @@ async def ai_portal_chat(request: Request):
         except Exception as _pm_e:
             logger.debug("AI portal PubMed enrichment failed (non-fatal): %s", _pm_e)
 
-    return {"response": response_text, "simulated": agent is None, "pubmed_context": pubmed_context}
+    # Extract AI-generated annotations from response
+    ai_annotations = extract_ai_annotations(response_text)
+
+    return {
+        "response": response_text,
+        "ai_annotations": ai_annotations,
+        "simulated": agent is None,
+        "pubmed_context": pubmed_context,
+    }
 
 
 @app.post("/api/ai-portal/transcribe")
