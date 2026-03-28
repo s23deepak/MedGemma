@@ -1,0 +1,7 @@
+# Production-level dependencies for MedGemma
+# Install with: pip install -r requirements-production.txt
+
+slowapi>=0.1.8              # Rate limiting and request throttling
+prometheus-client>=0.17.0   # Prometheus metrics and monitoring
+uvloop>=0.17.0              # High-performance event loop (recommended)
+httpx>=0.24.0               # For load testing (async HTTP client)

@@ -42,6 +42,7 @@ from .rag import compress_note, compress_note_negation_aware
 from .specialist_router import get_specialist_router
 from .specialist_councils import get_specialist_council
 from .decision_trail import get_decision_trail_recorder
+from src.hipaa import HIPAACompliantRAGPipeline, UserRole, PurposeOfUse
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,11 @@ class CouncilState(TypedDict):
     case_info: dict          # {symptoms, patient_history, imaging_findings, vitals}
     num_rollouts: int
     mode: Literal["standard", "iterative"]
+
+    # ── HIPAA compliance context ──────────────────────────────────────────────
+    user_id: str             # User identifier for audit logging
+    user_role: str           # User role (PHYSICIAN, SPECIALIST, etc.)
+    patient_id: str          # Patient identifier for audit logging
 
     # ── RAG context compression ───────────────────────────────────────────────
     raw_note: str            # full unstructured clinical note (optional, "" if absent)
@@ -94,10 +100,23 @@ class CouncilState(TypedDict):
 
 # ── Graph factory ─────────────────────────────────────────────────────────────
 
-def build_council_graph(agent=None, pubmed_agent=None):
+def build_council_graph(
+    agent=None,
+    pubmed_agent=None,
+    user_id: str = "physician-system",
+    user_role: str = "PHYSICIAN",
+    patient_id: str = "patient-unknown",
+):
     """
     Build and compile the council StateGraph.
     agent and pubmed_agent are captured via closure.
+
+    Args:
+        agent: MedGemma agent for generating opinions
+        pubmed_agent: PubMedSynthesisAgent for literature backing
+        user_id: User identifier for HIPAA audit logging
+        user_role: User role (PHYSICIAN, SPECIALIST, etc.) for access control
+        patient_id: Patient identifier for HIPAA audit logging
     """
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -171,14 +190,46 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
     def retrieve_context(state: CouncilState) -> dict:
         """
         Compress a full clinical note to the most symptom-relevant excerpts via RAG.
+        Uses HIPAA-compliant pipeline with de-identification, access control, and audit logging.
         No-op if raw_note is absent or empty.
         """
         raw_note = state.get("raw_note", "")
         if not raw_note or not raw_note.strip():
             return {"retrieved_context": ""}
+
         symptoms: list[str] = state["case_info"].get("symptoms", [])
-        context = compress_note_negation_aware(raw_note, symptoms, top_k=5, agent=agent)
-        return {"retrieved_context": context}
+        user_id: str = state.get("user_id", "physician-system")
+        user_role_str: str = state.get("user_role", "PHYSICIAN")
+        patient_id: str = state.get("patient_id", "patient-unknown")
+
+        try:
+            # Convert string role to UserRole enum
+            hipaa_role = UserRole[user_role_str] if hasattr(UserRole, user_role_str) else UserRole.PHYSICIAN
+
+            # Use HIPAA-compliant RAG pipeline
+            hipaa_rag = HIPAACompliantRAGPipeline()
+            context, metadata = hipaa_rag.compress_note_with_privacy(
+                user_id=user_id,
+                user_role=hipaa_role,
+                patient_id=patient_id,
+                raw_note=raw_note,
+                symptoms=symptoms,
+                purpose_of_use=PurposeOfUse.TREATMENT,
+                justification="Diagnostic council case review",
+                top_k=5,
+            )
+
+            if not metadata.get("access_granted", False):
+                logger.warning(f"HIPAA access denied for user {user_id}: {metadata.get('denial_reason')}")
+                return {"retrieved_context": f"[Access Denied: {metadata.get('denial_reason', 'Unknown')}]"}
+
+            return {"retrieved_context": context or ""}
+
+        except Exception as e:
+            logger.error(f"HIPAA RAG error: {e}. Falling back to non-HIPAA retrieval.")
+            # Fallback to non-HIPAA version
+            context = compress_note_negation_aware(raw_note, symptoms, top_k=5, agent=agent)
+            return {"retrieved_context": context}
 
     def _opinion_node(state: CouncilState) -> dict:
         """
@@ -681,7 +732,13 @@ Note: urgency MUST be one of: "routine", "urgent", "emergent"."""
 
 # ── Long-Horizon Graph Building (with checkpoint support) ───────────────────────
 
-def build_long_horizon_council_graph(agent=None, pubmed_agent=None):
+def build_long_horizon_council_graph(
+    agent=None,
+    pubmed_agent=None,
+    user_id: str = "physician-system",
+    user_role: str = "PHYSICIAN",
+    patient_id: str = "patient-unknown",
+):
     """
     Build the council graph for long-horizon workflows with checkpoint support.
 
@@ -692,9 +749,18 @@ def build_long_horizon_council_graph(agent=None, pubmed_agent=None):
     Args:
         agent: MedGemma agent for generating opinions
         pubmed_agent: PubMedSynthesisAgent for literature backing
+        user_id: User identifier for HIPAA audit logging
+        user_role: User role (PHYSICIAN, SPECIALIST, etc.) for access control
+        patient_id: Patient identifier for HIPAA audit logging
 
     Returns:
         Compiled LangGraph StateGraph (same as standard graph)
     """
-    # Reuse the standard graph builder
-    return build_council_graph(agent=agent, pubmed_agent=pubmed_agent)
+    # Reuse the standard graph builder with HIPAA parameters
+    return build_council_graph(
+        agent=agent,
+        pubmed_agent=pubmed_agent,
+        user_id=user_id,
+        user_role=user_role,
+        patient_id=patient_id,
+    )

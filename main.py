@@ -43,6 +43,11 @@ from src.monitoring.perf_tracker import track_perf, get_stats as get_perf_stats
 from src.config.hospital_config import get_hospital_registry, Hospital
 from src.rare_disease import get_rare_disease_director, RareCaseInput
 
+# Production hardening: async, monitoring, rate limiting, circuit breakers
+from src.production.metrics import MetricsCollector, RequestMetricsMiddleware
+from src.production.circuit_breaker import init_circuit_breakers, get_circuit_breaker_registry
+from src.production.rate_limiter import RateLimitConfig, get_limiter
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -285,6 +290,34 @@ app = FastAPI(
 static_path = Path(__file__).parent / "static"
 if static_path.exists():
     app.mount("/static", StaticFiles(directory=static_path), name="static")
+
+
+# ── Production Hardening Middleware ───────────────────────────────────────
+# Add metrics collection middleware for request tracking
+app.add_middleware(RequestMetricsMiddleware)
+
+# Add rate limiting if slowapi is available
+limiter = get_limiter()
+if limiter is not None:
+    app.state.limiter = limiter
+    # Register rate limit exception handler
+    from slowapi.errors import RateLimitExceeded
+    from src.production.rate_limiter import rate_limit_exception_handler
+    app.add_exception_handler(RateLimitExceeded, rate_limit_exception_handler)
+    logger.info("Rate limiting enabled")
+else:
+    logger.warning("Rate limiting disabled - slowapi not installed")
+
+# Initialize circuit breakers
+try:
+    init_circuit_breakers()
+    logger.info("Circuit breakers initialized")
+except Exception as e:
+    logger.warning(f"Failed to initialize circuit breakers: {e}")
+
+# Start Prometheus metrics server on port 8001
+MetricsCollector.start_prometheus_server(port=8001)
+
 
 
 # ── PubMed background task helper ─────────────────────────────────────────────
@@ -825,6 +858,42 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
     finally:
         if active_asr is not None:
             active_asr.stop_listening()
+
+
+# ── Health & Status Endpoints (Production) ───────────────────────────────
+
+
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint for load balancers."""
+    return {
+        "status": "healthy",
+        "timestamp": asyncio.get_event_loop().time(),
+        "services": {
+            "fhir_server": "ready" if fhir_server else "unavailable",
+            "agent": "ready" if agent else "unavailable",
+            "pubmed_agent": "ready" if pubmed_agent else "unavailable",
+        }
+    }
+
+
+@app.get("/api/status")
+async def get_status():
+    """Get detailed system status including circuit breaker state."""
+    from src.production.circuit_breaker import get_circuit_breaker_registry
+    registry = get_circuit_breaker_registry()
+
+    return {
+        "active_sessions": len(sessions),
+        "circuit_breakers": registry.get_status(),
+        "model_status": vllm_manager.get_status() if vllm_manager else "not_initialized",
+        "services": {
+            "fhir_server": bool(fhir_server),
+            "audit_logger": bool(audit_logger),
+            "treatment_service": bool(treatment_service),
+            "shift_brief_service": bool(shift_brief_service),
+        }
+    }
 
 
 @app.get("/api/model-status")
@@ -2769,25 +2838,38 @@ async def api_rare_disease_hunt(request: Request):
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
     parser = argparse.ArgumentParser(description="MedGemma Clinical Assistant")
     parser.add_argument("--use-vllm", action="store_true", help="Use vLLM backend for faster inference")
     parser.add_argument("--simulated", action="store_true", help="Run in simulated mode (no GPU)")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
+    parser.add_argument("--workers", type=int, default=None, help="Number of worker processes (default: CPU count)")
     args = parser.parse_args()
-    
+
     if args.simulated:
         os.environ["SIMULATED_MODE"] = "true"
         print("Running in SIMULATED mode (no GPU models)")
-    
+
     if args.use_vllm:
         os.environ["USE_VLLM"] = "true"
         print("Using vLLM backend for inference")
-    
+
+    # Configure workers: default to CPU count, min 2 for high concurrency
+    num_workers = args.workers or max(2, multiprocessing.cpu_count())
+    print(f"Starting MedGemma with {num_workers} worker process(es)")
+
     uvicorn.run(
         "main:app",
         host=args.host,
         port=args.port,
+        workers=num_workers,
         reload=False,
-        log_level="info"
+        log_level="info",
+        timeout_keep_alive=30,      # Force keepalive timeout every 30s
+        timeout_notify=60,           # 60s for graceful shutdown signal handling
+        backlog=2048,                # Accept up to 2048 pending connections
+        access_log=False,            # Disable access logs for performance (use middleware instead)
+        loop="uvloop" if os.environ.get("ENABLE_UVLOOP", "true").lower() in ("1", "true") else "auto"
     )

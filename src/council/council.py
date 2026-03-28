@@ -263,7 +263,15 @@ class DiagnosticCouncil:
     and synthesizes them into a consensus recommendation.
     """
 
-    def __init__(self, agent=None, num_rollouts: int = 5, pubmed_agent=None):
+    def __init__(
+        self,
+        agent=None,
+        num_rollouts: int = 5,
+        pubmed_agent=None,
+        user_id: str = "physician-system",
+        user_role: str = "PHYSICIAN",
+        patient_id: str = "patient-unknown",
+    ):
         """
         Initialize the diagnostic council.
 
@@ -271,10 +279,16 @@ class DiagnosticCouncil:
             agent: MedGemma agent for generating opinions
             num_rollouts: Number of parallel opinions to generate
             pubmed_agent: PubMedSynthesisAgent for literature backing
+            user_id: User identifier for audit logging (HIPAA)
+            user_role: User role (e.g., 'PHYSICIAN', 'SPECIALIST'); used for access control
+            patient_id: Patient identifier for audit logging (HIPAA)
         """
         self.agent = agent
         self.num_rollouts = num_rollouts
         self.pubmed_agent = pubmed_agent
+        self.user_id = user_id
+        self.user_role = user_role
+        self.patient_id = patient_id
         self.deliberation_history: list[CouncilDeliberation] = []
         self._graph = None  # lazy-built LangGraph workflow
 
@@ -282,7 +296,13 @@ class DiagnosticCouncil:
         """Lazily build and cache the LangGraph workflow."""
         if self._graph is None:
             from .graph import build_council_graph
-            self._graph = build_council_graph(self.agent, self.pubmed_agent)
+            self._graph = build_council_graph(
+                self.agent,
+                self.pubmed_agent,
+                user_id=self.user_id,
+                user_role=self.user_role,
+                patient_id=self.patient_id,
+            )
         return self._graph
 
     def _build_deliberation(
@@ -528,6 +548,10 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
             "r2_consensus_strength": "weak",
             "r2_consensus_confidence": 0.0,
             "r2_discussion_summary": "",
+            # HIPAA compliance context
+            "user_id": self.user_id,
+            "user_role": self.user_role,
+            "patient_id": self.patient_id,
         }
 
         result = self._get_graph().invoke(init_state)
@@ -583,6 +607,10 @@ Note: "urgency" MUST be one of: "routine", "urgent", "emergent"."""
             "r2_consensus_strength": "weak",
             "r2_consensus_confidence": 0.0,
             "r2_discussion_summary": "",
+            # HIPAA compliance context
+            "user_id": self.user_id,
+            "user_role": self.user_role,
+            "patient_id": self.patient_id,
         }
 
         result = self._get_graph().invoke(init_state)
