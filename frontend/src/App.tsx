@@ -1,6 +1,11 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
+import { useSelector, useDispatch } from 'react-redux'
 import Header from './components/Header'
+import { ToastContainer } from './components/Toast'
+import ApiTestPage from './components/Pages/ApiTestPage'
 import HealthPolling from './hooks/useHealthPolling'
+import { RootState } from './store/store'
+import { removeToast } from './store/toastSlice'
 import './styles/globals.css'
 
 // Page placeholders - will be replaced with actual migrated components
@@ -14,6 +19,9 @@ function App() {
   // Start health polling on app load
   HealthPolling()
 
+  const toasts = useSelector((state: RootState) => state.toast.messages)
+  const dispatch = useDispatch()
+
   return (
     <Router>
       <div className="min-h-screen bg-gray-50">
@@ -26,8 +34,15 @@ function App() {
             <Route path="/monitoring" element={<MonitoringDashboard />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/compliance" element={<CompliancePage />} />
+            <Route path="/api-test" element={<ApiTestPage />} />
           </Routes>
         </main>
+
+        {/* Global Toast Container */}
+        <ToastContainer
+          toasts={toasts}
+          onDismiss={(id) => dispatch(removeToast(id))}
+        />
       </div>
     </Router>
   )

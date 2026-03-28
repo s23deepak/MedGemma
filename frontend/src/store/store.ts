@@ -2,12 +2,14 @@ import { configureStore } from '@reduxjs/toolkit';
 import healthReducer from './healthSlice';
 import metricsReducer from './metricsSlice';
 import rateLimitReducer from './rateLimitSlice';
+import toastReducer from './toastSlice';
 
 export const store = configureStore({
   reducer: {
     health: healthReducer,
     metrics: metricsReducer,
     rateLimit: rateLimitReducer,
+    toast: toastReducer,
   },
 });
 

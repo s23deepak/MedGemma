@@ -33,6 +33,9 @@ export default function Header() {
             <a href="/monitoring" className="text-gray-600 hover:text-gray-900 text-sm font-medium">
               Monitoring
             </a>
+            <a href="/api-test" className="text-gray-600 hover:text-gray-900 text-sm font-medium">
+              API Test
+            </a>
           </nav>
 
           {/* Health Status Indicators */}
