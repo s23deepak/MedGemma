@@ -50,6 +50,10 @@ class SimulationSession:
     started_at: str = field(default_factory=lambda: datetime.now().isoformat())
     completed_at: str = ""
 
+    # Context caching (performance optimization for repeated questions)
+    _cached_history_context: str = ""  # Pre-formatted history context
+    _cached_patient_system_prompt: str = ""  # Pre-formatted system prompt with case context
+
     def to_dict(self) -> dict:
         return {
             "session_id": self.session_id,
@@ -92,6 +96,12 @@ Rules:
 - Do NOT volunteer information the resident hasn't asked about
 - Do NOT use medical terminology — speak as a layperson
 - Keep responses to 2-4 sentences
+- Do NOT include any preamble, planning, reasoning, or internal thoughts
+- Do NOT use "Plan:", "I should", "I need to", or "Let me" statements
+
+RESPONSE FORMAT:
+Respond ONLY with the patient's dialogue. No explanations, no meta-commentary.
+Example: "Okay, the pain is on my right side. It's sharp and gets worse when I breathe deeply."
 
 Resident's question: {question}
 """
@@ -169,11 +179,21 @@ class SimulationEngine:
         MedGemma responds in character as the patient via a stateful LangChain
         chain — prior turns are injected as MessagesPlaceholder history so the
         persona stays consistent across the session.
+
+        Performance: Uses cached patient context to avoid re-rendering on every question.
         Returns {"question": ..., "response": ..., "ai": bool}
         """
         session = self._get_active_session(session_id)
         case = session.case
-        history_ctx = "\n".join(f"- {k}: {v}" for k, v in case.history_data.items())
+
+        # Build and cache history context on first question (avoids re-formatting on every call)
+        if not session._cached_history_context:
+            session._cached_history_context = "\n".join(
+                f"- {k}: {v}" for k, v in case.history_data.items()
+            )
+            logger.debug(f"[{session_id}] Cached patient history context ({len(session._cached_history_context)} chars)")
+
+        history_ctx = session._cached_history_context
 
         if self._chain is not None:
             try:
@@ -403,11 +423,27 @@ class SimulationEngine:
         signals, then return only everything after the first blank line.
         """
         import re
-        # Strip leading <unusedN> token artefacts
-        text = re.sub(r"^<unused\d+>\s*", "", text.strip())
+        text = text.strip()
+
+        # Strip <unusedN> token artefacts from anywhere in the text
+        text = re.sub(r"<unused\d+>", "", text)
+
+        # Special handling for "Plan: 1. ... 2. ..." format (often runs into actual response)
+        if text.lower().startswith("plan:"):
+            after_plan = text[5:]  # Skip "Plan:"
+            # Find all numbered steps ("1. ...", "2. ...", etc.) and get position after last one
+            last_step_end = 0
+            for step_match in re.finditer(r"\d+\.\s+[^.]*?\.", after_plan):
+                last_step_end = step_match.end()
+
+            if last_step_end > 0:
+                # Everything after the last numbered step should be the patient response
+                remainder = after_plan[last_step_end:].lstrip()
+                if remainder:
+                    return remainder
 
         if "\n\n" not in text:
-            # No separator — if starts with 'thought', best-effort strip
+            # No separator — check for plan/thought even without \n\n
             if text.lower().startswith("thought"):
                 return re.sub(r"^thought\b.*", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
             return text

@@ -268,10 +268,37 @@ Respond with ONLY valid JSON, no explanation:
         try:
             resp_raw = await asyncio.to_thread(self.agent.chat, prompt)
             resp_raw = resp_raw.strip()
-            # Extract JSON from response
-            json_match = re.search(r'\{.*\}', resp_raw, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group())
+            # Extract JSON from response - try multiple strategies
+            data = None
+
+            # Strategy 1: Try exact JSON parsing first (if response is pure JSON)
+            try:
+                data = json.loads(resp_raw)
+            except json.JSONDecodeError:
+                # Strategy 2: Extract JSON from response (use non-greedy match)
+                # Look for the first valid JSON object
+                json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', resp_raw)
+                if json_match:
+                    try:
+                        data = json.loads(json_match.group())
+                    except json.JSONDecodeError:
+                        # Strategy 3: Find first { and scan for matching }
+                        start_idx = resp_raw.find('{')
+                        if start_idx >= 0:
+                            depth = 0
+                            for i in range(start_idx, len(resp_raw)):
+                                if resp_raw[i] == '{':
+                                    depth += 1
+                                elif resp_raw[i] == '}':
+                                    depth -= 1
+                                    if depth == 0:
+                                        try:
+                                            data = json.loads(resp_raw[start_idx:i+1])
+                                            break
+                                        except json.JSONDecodeError:
+                                            pass
+
+            if data and isinstance(data, dict):
                 candidates = data.get("rare_disease_candidates", [])
                 if isinstance(candidates, list):
                     return [str(c).strip() for c in candidates if c]
@@ -299,7 +326,7 @@ Respond with ONLY valid JSON, no explanation:
             try:
                 result = await asyncio.to_thread(
                     self.pubmed_agent.case_matcher,
-                    symptoms=fp.symptoms[:6],
+                    common_symptoms=fp.symptoms[:6],
                     atypical_markers=[name] + fp.atypical_markers[:2],
                     max_results=5,
                 )

@@ -65,8 +65,6 @@ curl http://localhost:8001/metrics
 python tests/load_test.py
 ```
 
-See [Production Deployment Guide](docs/PRODUCTION_DEPLOYMENT.md) for full configuration, Docker/Kubernetes setup, and operational procedures.
-
 ---
 
 ### Encounter — Multimodal SOAP Generation
@@ -114,6 +112,33 @@ A background PubMed synthesis agent runs three searches in parallel: rare-diagno
 - **Specialist Feedback Loop**: 6 feedback types (correct, incorrect, incomplete, over-referred, helpful, redundant) with accuracy scores (0.0–1.0)
 - **Automatic Routing Tuning**: RoutingFeedbackLearner analyzes specialist accuracy; recommends threshold adjustments (increase, decrease, auto-route, remove) when confidence > 0.6
 - **Learning Dashboard**: Case outcome metrics, system-level accuracy, specialist leaderboards, and escalation trends queryable at any time
+
+#### How It Works
+
+```mermaid
+flowchart TD
+    A([Patient Input\nsymptoms · history · imaging · vitals]) --> B[RAG Context Retrieval\noptional clinical note]
+    B --> C{Parallel Rollouts\n3 / 5 / 7 agents}
+
+    C --> D1[Agent 1\nDiagnosticOpinion]
+    C --> D2[Agent 2\nDiagnosticOpinion]
+    C --> D3[Agent N\nDiagnosticOpinion]
+
+    D1 & D2 & D3 --> E[Vote Counting\ntally primary_diagnosis]
+
+    E --> F{Agreement Rate}
+    F -->|>80%| G1[STRONG consensus 🟢]
+    F -->|60-80%| G2[MODERATE consensus 🟡]
+    F -->|40-60%| G3[WEAK consensus 🔴]
+    F -->|<40%| G4[SPLIT 🔴]
+
+    G1 & G2 & G3 & G4 --> H[CouncilDeliberation\nconsensus · urgency · tests]
+
+    E -->|Deep Dive mode| I[PubMed case_matcher\nfetch rare disease names]
+    I --> J[Inject names → Round 2\nre-run N rollouts]
+    J --> K{Consensus shifted?}
+    K --> H
+```
 
 #### Workflow Graph
 
@@ -296,33 +321,32 @@ When common diagnoses have been ruled out, the Rare Disease Director gives clini
 
 The entry point is `/rare-disease`. A clinician enters symptoms, labs, imaging findings, and an optional history note; the director returns a ranked list of rare disease candidates with evidence tiers, matching/anti-features, confirmatory tests, specialist referral type, and urgency.
 
-```
-[Round 0] Symptom Fingerprinting + Ontology Seed Hypotheses (fast, no LLM)
-          ─ curated knowledge base of ~60 rare diseases across 8 organ systems
-          ─ ≥2 trigger-symptom matches → seed hypothesis
-                │
-                ▼
-[Round 1] MedGemma LLM Hypothesis Generation
-          ─ structured JSON prompt for 5 rare disease candidates with reasoning
-          ─ merged with ontology seeds (dedup by name)
-                │
-                ▼
-[TTT Loop — max 3 iterations]
-  ├─ PubMed Zebra Hunt per hypothesis (reuses PubMedSynthesisAgent.case_matcher)
-  ├─ Reward = 0.40 × symptom_coverage
-  │         + 0.40 × evidence_strength
-  │         + 0.20 × coherence_score
-  ├─ best_reward ≥ 0.55 → CONVERGE (early exit)
-  ├─ iter 1 expansion: ontology adjacency + mimics for top-3 hypotheses
-  └─ iter 2+ expansion: LLM self-critique for still-unexplained features
-                │
-                ▼
-Direction Report (top N hypotheses, ranked by reward)
-  ─ Evidence tier: well-evidenced / some-evidence / speculative
-  ─ Matching features (✓) and anti-features (✗ absent high-weight findings)
-  ─ Confirmatory tests, specialist referral, urgency
-  ─ TTT convergence metadata (iterations used, final reward)
-  ─ Mandatory disclaimer: directional guidance, requires physician validation
+```mermaid
+flowchart TD
+    A([Patient Input\nsymptoms · labs · imaging · demographics]) --> B[Phase 0: Fingerprint\natypical markers · lab anomalies · young patient flag]
+
+    B --> C[Phase 1: Ontology Seeds\nno API · pure graph lookup\n~60 rare diseases across 8 organ systems]
+    B --> D[Phase 2: LLM Candidates\nask MedGemma for 6 rare diseases\nincidence < 1:2000]
+
+    C & D --> E[Merge + Deduplicate\nhypothesis list]
+
+    E --> F[/TTT Loop — max 3 iterations/]
+
+    F --> G[Step A: PubMed Fetch\nquery each unseen hypothesis · cache results]
+    G --> H["Step B: Reward Score\nreward = 0.40 × symptom_coverage\n       + 0.40 × evidence_strength\n       + 0.20 × coherence_score"]
+
+    H --> I{best_reward ≥ 0.55?}
+
+    I -->|YES| J([CONVERGED])
+    I -->|NO + iterations remain| K{Which iteration?}
+
+    K -->|Iter 0| L[Ontology Adjacency\nexpand to adjacent diseases\nin disease graph]
+    K -->|Iter 1+| M[LLM Self-Critique\nunexplained symptoms + top-3 gaps\n→ ask for alternatives]
+
+    L & M --> N[Add new hypotheses\nback to list]
+    N --> F
+
+    J --> O[RareDiseaseReport\nranked hypotheses · reward scores\nmatching features · NOT DOCUMENTED gaps\nconfirmatory tests · ICD-10 · specialist]
 ```
 
 Ontology coverage spans 8 organ systems: Rheumatologic · Metabolic/Genetic · Hematologic · Neurologic · Endocrine · Vascular/Cardiac · Hepatic/GI · Pulmonary. Representative entries include HLH, Wilson's Disease, Antiphospholipid Syndrome, MELAS, TTP, Takayasu Arteritis, POEMS Syndrome, and ~55 others.

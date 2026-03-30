@@ -737,6 +737,14 @@ async function sendMessage() {
     if (!text && !portalState.chatAttachedImage) return;
     if (portalState.isGenerating) return;
 
+    // Validate: if message suggests image analysis but no image attached, warn user
+    const analysisKeywords = ['analyze', 'look at', 'check', 'examine', 'review', 'image', 'scan', 'xray', 'mri', 'ct', 'ultrasound', 'ecg'];
+    const hasAnalysisKeyword = analysisKeywords.some(kw => text.toLowerCase().includes(kw));
+    if (hasAnalysisKeyword && !portalState.chatAttachedImage) {
+        showToast('⚠️ No image attached. Image analysis requires an uploaded image.');
+        return;
+    }
+
     const msg = {
         role: 'user',
         content: text || '(Image attached — please analyze)',
@@ -781,6 +789,7 @@ async function sendMessage() {
             content: data.response || '(No response)',
             pubmedContext: data.pubmed_context || null,
             aiAnnotations: data.ai_annotations || [],  // NEW
+            clinicalMeta: data.clinical_meta || null,  // structured metadata
         };
 
         // Store AI annotations in portal state for canvas rendering
@@ -845,6 +854,53 @@ function buildRequestBody(userMsg) {
 
 // ── Chat rendering ────────────────────────────────────────────────────────────
 
+function renderClinicalMetaCard(meta) {
+    if (!meta) return '';
+    const confColors = {
+        high:     { bg: '#dcfce7', border: '#86efac', text: '#166534' },
+        moderate: { bg: '#fef9c3', border: '#fde047', text: '#713f12' },
+        low:      { bg: '#fee2e2', border: '#fca5a5', text: '#991b1b' },
+    };
+    const c = confColors[meta.confidence] || confColors.moderate;
+
+    let html = `<div style="margin-top:8px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;font-size:13px;">`;
+
+    // Confidence header
+    html += `<div style="padding:6px 12px;background:${c.bg};border-bottom:1px solid ${c.border};color:${c.text};font-weight:600;font-size:12px;">
+        ● Confidence: ${meta.confidence}
+    </div>`;
+
+    // Warnings — shown first, red
+    if (meta.warnings && meta.warnings.length > 0) {
+        html += `<div style="padding:8px 12px;background:#fff1f2;border-bottom:1px solid #fecdd3;">
+            <div style="font-weight:700;color:#be123c;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">⚠ Critical Flags</div>
+            <ul style="margin:0;padding-left:16px;color:#9f1239;">
+                ${meta.warnings.map(w => `<li style="margin-bottom:2px;">${escapeHtml(w)}</li>`).join('')}
+            </ul></div>`;
+    }
+
+    // Key points
+    if (meta.key_points && meta.key_points.length > 0) {
+        html += `<div style="padding:8px 12px;border-bottom:1px solid #e2e8f0;">
+            <div style="font-weight:700;color:#1e40af;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Key Points</div>
+            <ul style="margin:0;padding-left:16px;color:#1e3a8a;">
+                ${meta.key_points.map(p => `<li style="margin-bottom:2px;">${escapeHtml(p)}</li>`).join('')}
+            </ul></div>`;
+    }
+
+    // Suggested actions
+    if (meta.suggested_actions && meta.suggested_actions.length > 0) {
+        html += `<div style="padding:8px 12px;">
+            <div style="font-weight:700;color:#065f46;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Suggested Actions</div>
+            <ul style="margin:0;padding-left:16px;color:#064e3b;">
+                ${meta.suggested_actions.map(a => `<li style="margin-bottom:2px;">→ ${escapeHtml(a)}</li>`).join('')}
+            </ul></div>`;
+    }
+
+    html += `</div>`;
+    return html;
+}
+
 function renderMessage(msg) {
     const container = document.getElementById('chatMessages');
 
@@ -881,6 +937,12 @@ function renderMessage(msg) {
                   </span>`;
     }
 
+    // Clinical metadata card (assistant messages only)
+    let clinicalMetaHtml = '';
+    if (msg.role === 'assistant' && msg.clinicalMeta) {
+        clinicalMetaHtml = renderClinicalMetaCard(msg.clinicalMeta);
+    }
+
     // PubMed context panel (assistant messages only)
     let pubmedHtml = '';
     if (msg.role === 'assistant' && msg.pubmedContext) {
@@ -891,6 +953,7 @@ function renderMessage(msg) {
         <span class="msg-role">${roleLabel}</span>
         <div class="${bubbleClass}">${bubbleContent}</div>
         ${extra}
+        ${clinicalMetaHtml}
         ${pubmedHtml}
     `;
 

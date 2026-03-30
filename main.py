@@ -1626,6 +1626,7 @@ def extract_ai_annotations(response_text: str) -> list[dict]:
     Extract bounding box annotations from MedGemma response.
 
     Looks for a JSON block at the end of the response with findings + coordinates.
+    If JSON is missing but findings are detected, creates default bounding boxes.
     Returns a list of annotation dicts with normalized [0-1] coordinates.
     """
     import re
@@ -1635,66 +1636,119 @@ def extract_ai_annotations(response_text: str) -> list[dict]:
 
     try:
         # Look for JSON block in response (typically near end)
-        # Pattern: {...findings...} or ]
-        json_pattern = r'\{[^{}]*"findings"[^{}]*\[[\s\S]*?\]\s*\}'
+        json_pattern = r'\{\s*"findings"\s*:\s*\[[\s\S]*?\]\s*\}'
         match = re.search(json_pattern, response_text)
-
-        if not match:
-            # Try simpler pattern: any JSON-like structure
-            json_pattern = r'\{\s*"findings"\s*:\s*\[[\s\S]*?\]\s*\}'
-            match = re.search(json_pattern, response_text)
 
         if match:
             json_str = match.group(0)
             parsed = json.loads(json_str)
 
-            if "findings" not in parsed or not isinstance(parsed["findings"], list):
-                return []
+            if "findings" in parsed and isinstance(parsed["findings"], list):
+                for finding in parsed["findings"]:
+                    try:
+                        # Extract and validate bounding box
+                        box = finding.get("normalized_box", {})
+                        if not isinstance(box, dict):
+                            continue
 
-            for finding in parsed["findings"]:
-                try:
-                    # Extract and validate bounding box
-                    box = finding.get("normalized_box", {})
-                    if not isinstance(box, dict):
+                        x = float(box.get("x", 0.0))
+                        y = float(box.get("y", 0.0))
+                        w = float(box.get("w", 0.1))
+                        h = float(box.get("h", 0.1))
+
+                        # Clamp to [0, 1]
+                        x = max(0.0, min(1.0, x))
+                        y = max(0.0, min(1.0, y))
+                        w = max(0.01, min(1.0, w))
+                        h = max(0.01, min(1.0, h))
+
+                        # Ensure box doesn't exceed image bounds
+                        if x + w > 1.0:
+                            w = 1.0 - x
+                        if y + h > 1.0:
+                            h = 1.0 - y
+
+                        description = finding.get("description", "Finding")
+                        confidence = float(finding.get("confidence", 0.5))
+                        confidence = max(0.0, min(1.0, confidence))
+                        significance = finding.get("significance", "SIGNIFICANT")
+
+                        annotation = {
+                            "id": f"ai-{uuid.uuid4().hex[:8]}",
+                            "x": round(x, 3),
+                            "y": round(y, 3),
+                            "w": round(w, 3),
+                            "h": round(h, 3),
+                            "label": description,
+                            "source": "ai",
+                            "confidence": round(confidence, 2),
+                            "significance": significance,
+                        }
+                        ai_annotations.append(annotation)
+                    except (ValueError, TypeError) as e:
+                        logger.debug(f"Failed to parse annotation finding: {e}")
                         continue
+        else:
+            # FALLBACK: If no JSON found, detect findings mentioned in text and create default boxes
+            # This handles cases where model talks about findings but didn't output JSON format
+            finding_keywords = [
+                'opacity', 'consolidation', 'infiltrate', 'nodule', 'mass', 'lesion',
+                'effusion', 'pneumothorax', 'fracture', 'displacement', 'dislocation',
+                'air-fluid', 'artifact', 'evidence of', 'presence of', 'concerning for',
+                'suspicious for'
+            ]
 
-                    x = float(box.get("x", 0.0))
-                    y = float(box.get("y", 0.0))
-                    w = float(box.get("w", 0.1))
-                    h = float(box.get("h", 0.1))
+            mentions_findings = any(kw in response_text.lower() for kw in finding_keywords)
+            if mentions_findings:
+                # Extract finding locations mentioned in text
+                location_patterns = [
+                    r'(right|left|bilateral|upper|lower|middle|apical|basilar|anterior|posterior|medial|lateral)\s+(lobe|chest|lung|abdomen|heart)',
+                    r'(right|left)\s+(lower|upper|middle)\s+field',
+                    r'in\s+the\s+(right|left)\s+(lower|upper)',
+                ]
 
-                    # Clamp to [0, 1]
-                    x = max(0.0, min(1.0, x))
-                    y = max(0.0, min(1.0, y))
-                    w = max(0.01, min(1.0, w))
-                    h = max(0.01, min(1.0, h))
+                found_locations = set()
+                for pattern in location_patterns:
+                    matches = re.findall(pattern, response_text.lower())
+                    found_locations.update(str(m) for m in matches)
 
-                    # Ensure box doesn't exceed image bounds
-                    if x + w > 1.0:
-                        w = 1.0 - x
-                    if y + h > 1.0:
-                        h = 1.0 - y
-
-                    description = finding.get("description", "Finding")
-                    confidence = float(finding.get("confidence", 0.5))
-                    confidence = max(0.0, min(1.0, confidence))
-                    significance = finding.get("significance", "SIGNIFICANT")
-
-                    annotation = {
-                        "id": f"ai-{uuid.uuid4().hex[:8]}",
-                        "x": round(x, 3),
-                        "y": round(y, 3),
-                        "w": round(w, 3),
-                        "h": round(h, 3),
-                        "label": description,
-                        "source": "ai",
-                        "confidence": round(confidence, 2),
-                        "significance": significance,
+                if found_locations:
+                    # Create default bounding boxes for detected locations
+                    location_boxes = {
+                        'right lower': {'x': 0.55, 'y': 0.45, 'w': 0.35, 'h': 0.40},
+                        'right upper': {'x': 0.55, 'y': 0.05, 'w': 0.35, 'h': 0.35},
+                        'left lower': {'x': 0.10, 'y': 0.45, 'w': 0.35, 'h': 0.40},
+                        'left upper': {'x': 0.10, 'y': 0.05, 'w': 0.35, 'h': 0.35},
                     }
-                    ai_annotations.append(annotation)
-                except (ValueError, TypeError) as e:
-                    logger.debug(f"Failed to parse annotation finding: {e}")
-                    continue
+
+                    for location in found_locations:
+                        if 'lower' in location and 'right' in location:
+                            box = location_boxes['right lower']
+                            label = 'Right lower lobe finding'
+                        elif 'lower' in location and 'left' in location:
+                            box = location_boxes['left lower']
+                            label = 'Left lower lobe finding'
+                        elif 'upper' in location and 'right' in location:
+                            box = location_boxes['right upper']
+                            label = 'Right upper lobe finding'
+                        elif 'upper' in location and 'left' in location:
+                            box = location_boxes['left upper']
+                            label = 'Left upper lobe finding'
+                        else:
+                            continue
+
+                        annotation = {
+                            "id": f"ai-{uuid.uuid4().hex[:8]}",
+                            "x": round(box['x'], 3),
+                            "y": round(box['y'], 3),
+                            "w": round(box['w'], 3),
+                            "h": round(box['h'], 3),
+                            "label": label,
+                            "source": "ai",
+                            "confidence": 0.65,  # Lower confidence since we're inferring
+                            "significance": "SIGNIFICANT",
+                        }
+                        ai_annotations.append(annotation)
 
     except json.JSONDecodeError as e:
         logger.debug(f"AI annotations JSON parse error: {e}")
@@ -1702,6 +1756,40 @@ def extract_ai_annotations(response_text: str) -> list[dict]:
         logger.warning(f"Unexpected error extracting AI annotations: {e}")
 
     return ai_annotations
+
+
+def extract_clinical_meta(response_text: str) -> tuple[dict | None, str]:
+    """
+    Extract the clinical_meta JSON block appended by the model at the end of its response.
+
+    Returns (clinical_meta_dict_or_None, cleaned_response_text).
+    The JSON line is stripped from the visible text so users never see raw JSON.
+    """
+    import re
+
+    meta = None
+    cleaned = response_text
+
+    try:
+        # Match the clinical_meta JSON object — must contain the "clinical_meta" key
+        pattern = r'\{[^{}]*"clinical_meta"\s*:\s*\{[^{}]*\}[^{}]*\}'
+        match = re.search(pattern, response_text, re.DOTALL)
+        if match:
+            parsed = json.loads(match.group(0))
+            inner = parsed.get("clinical_meta", {})
+            # Validate expected fields
+            meta = {
+                "key_points": [str(p) for p in inner.get("key_points", []) if p and str(p).strip() != "..."],
+                "warnings": [str(w) for w in inner.get("warnings", []) if w and str(w).strip() != "..."],
+                "confidence": inner.get("confidence", "moderate") if inner.get("confidence") in ("high", "moderate", "low") else "moderate",
+                "suggested_actions": [str(a) for a in inner.get("suggested_actions", []) if a and str(a).strip() != "..."],
+            }
+            # Strip the JSON line from visible response
+            cleaned = response_text[:match.start()].rstrip()
+    except (json.JSONDecodeError, Exception) as e:
+        logger.debug(f"clinical_meta extraction failed: {e}")
+
+    return meta, cleaned
 
 
 @app.post("/api/ai-portal/chat")
@@ -1742,7 +1830,13 @@ async def ai_portal_chat(request: Request):
     parts.append(
         "You are MedGemma, a clinical AI assistant helping Doctors and Residents. "
         "Provide accurate, evidence-based clinical insights. "
-        "Always note diagnostic uncertainty and recommend clinical correlation."
+        "Always note diagnostic uncertainty and recommend clinical correlation. "
+        "IMPORTANT: Only analyze medical images when an actual image is provided in the current message. "
+        "If the user asks about an image but none was uploaded, ask them to upload it first. "
+        "Do NOT fabricate or hallucinate image analyses. "
+        "RESPONSE FORMAT: Use ## headers for sections, bullet lists (-) for findings, and **bold** for key clinical terms. "
+        "At the very end of your response, append exactly this JSON on its own line (no code fences): "
+        '{"clinical_meta": {"key_points": ["..."], "warnings": [], "confidence": "high|moderate|low", "suggested_actions": ["..."]}}'
     )
 
     # Patient context
@@ -1775,7 +1869,23 @@ async def ai_portal_chat(request: Request):
         parts.append("\n## Conversation History")
         for turn in history[-8:]:  # keep last 8 turns for context window
             role_label = "Doctor" if turn["role"] == "user" else "MedGemma"
-            parts.append(f"**{role_label}:** {turn['content']}")
+            content = turn['content']
+
+            # FILTER: If current request has NO image but history has image analyses,
+            # truncate verbose medical analyses to avoid model hallucination on past analyses
+            if not image_data and role_label == "MedGemma":
+                # Detect if this looks like a full image analysis (starts with image findings/impressions)
+                is_image_analysis = any(
+                    content.strip().startswith(prefix)
+                    for prefix in ["Heart size:", "Findings:", "Overall Impression:",
+                                   "The image shows", "Brain parenchyma:", "Liver:",
+                                   "Rhythm:", "Ventricles:", "Image Analysis"]
+                )
+                if is_image_analysis:
+                    # Replace with summary instead of full analysis
+                    content = "[Previous image analysis — omitted to prevent model confusion when no current image provided]"
+
+            parts.append(f"**{role_label}:** {content}")
 
     # Annotation context
     if annotations:
@@ -1968,9 +2078,13 @@ async def ai_portal_chat(request: Request):
     # Extract AI-generated annotations from response
     ai_annotations = extract_ai_annotations(response_text)
 
+    # Extract structured clinical metadata and strip JSON from visible text
+    clinical_meta, response_text = extract_clinical_meta(response_text)
+
     return {
         "response": response_text,
         "ai_annotations": ai_annotations,
+        "clinical_meta": clinical_meta,
         "simulated": agent is None,
         "pubmed_context": pubmed_context,
     }
@@ -2856,8 +2970,25 @@ if __name__ == "__main__":
         os.environ["USE_VLLM"] = "true"
         print("Using vLLM backend for inference")
 
-    # Configure workers: default to CPU count, min 2 for high concurrency
-    num_workers = args.workers or max(2, multiprocessing.cpu_count())
+    # Respect environment flag as well as CLI switch.
+    use_vllm = os.environ.get("USE_VLLM", "false").lower() in ("1", "true", "yes")
+    is_wsl = bool(os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"))
+
+    # Configure workers conservatively for GPU/WSL stability.
+    # vLLM and WSL are much more stable with a single worker process.
+    if args.workers is not None:
+        num_workers = args.workers
+    elif use_vllm or is_wsl:
+        num_workers = 1
+    else:
+        num_workers = max(2, multiprocessing.cpu_count())
+
+    if use_vllm and num_workers > 1:
+        print("WARNING: USE_VLLM=true with multiple workers can crash due to duplicated GPU model loads.")
+        print("WARNING: Consider --workers 1 for stability.")
+
+    if is_wsl and num_workers > 1:
+        print("WARNING: WSL detected with multiple workers; this can increase memory pressure and instability.")
     print(f"Starting MedGemma with {num_workers} worker process(es)")
 
     uvicorn.run(
@@ -2868,7 +2999,7 @@ if __name__ == "__main__":
         reload=False,
         log_level="info",
         timeout_keep_alive=30,      # Force keepalive timeout every 30s
-        timeout_notify=60,           # 60s for graceful shutdown signal handling
+        # timeout_notify=60,           # 60s for graceful shutdown signal handling
         backlog=2048,                # Accept up to 2048 pending connections
         access_log=False,            # Disable access logs for performance (use middleware instead)
         loop="uvloop" if os.environ.get("ENABLE_UVLOOP", "true").lower() in ("1", "true") else "auto"

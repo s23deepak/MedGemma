@@ -75,6 +75,12 @@ Rules:
 - Do NOT volunteer information the resident hasn't asked for.
 - Do NOT use medical terminology — speak as a layperson.
 - Keep responses to 2–4 sentences.
+- Do NOT include any preamble, planning, reasoning, or internal thoughts.
+- Do NOT use "Plan:", "I should", "I need to", or "Let me" statements.
+
+RESPONSE FORMAT:
+Respond ONLY with the patient's dialogue. No explanations, no meta-commentary.
+Example: "Okay, the pain is on my right side. It's sharp and gets worse when I breathe deeply."
 """
 
 _PATIENT_PROMPT = ChatPromptTemplate.from_messages([

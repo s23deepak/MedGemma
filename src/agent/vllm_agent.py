@@ -86,6 +86,21 @@ IMPORTANT GUIDELINES:
 - Be thorough but concise in your analysis
 - Consider the patient's history and context when available
 - Flag any inconsistencies between reported symptoms and image findings
+
+RESPONSE FORMAT:
+- Use ## headers to separate major sections (e.g. ## Assessment, ## Recommendations, ## Key Findings)
+- Use bullet lists (-) for enumerated findings, differentials, or action items
+- Bold (**term**) key clinical terms, drug names, and critical values
+- Keep prose concise — prefer lists over long paragraphs
+
+STRUCTURED METADATA — at the very end of EVERY response, append exactly this JSON on its own line (no code fences):
+{"clinical_meta": {"key_points": ["...", "..."], "warnings": [], "confidence": "high|moderate|low", "suggested_actions": ["...", "..."]}}
+
+Rules for clinical_meta:
+- key_points: 2-4 most important clinical takeaways
+- warnings: urgent/critical flags (empty array [] if none)
+- confidence: "high", "moderate", or "low"
+- suggested_actions: 1-3 next steps for the clinician (empty array [] if not applicable)
 """
     
     def analyze_image(
@@ -121,14 +136,16 @@ IMPORTANT GUIDELINES:
         # Build symptom context
         symptoms_str = ", ".join(patient_symptoms) if patient_symptoms else "Not provided"
         complaint_str = chief_complaint if chief_complaint else "Not provided"
-        
-        # Enhanced prompt with artifact detection and clinical correlation
-        prompt = f"""Analyze this {modality.upper()} image for a clinical encounter.
+        context_str = clinical_context if clinical_context else "Not provided"
+        body_region_str = body_region if body_region else "Not specified"
 
-Clinical Context: {clinical_context if clinical_context else "Not provided"}
-Patient's Chief Complaint: {complaint_str}
-Patient's Reported Symptoms: {symptoms_str}
-Body Region: {body_region if body_region else "Not specified"}
+        # Enhanced prompt with artifact detection and clinical correlation
+        prompt = """Analyze this {modality} image for a clinical encounter.
+
+Clinical Context: {context}
+Patient's Chief Complaint: {complaint}
+Patient's Reported Symptoms: {symptoms}
+Body Region: {region}
 
 Please provide a structured analysis with ALL of the following sections:
 
@@ -164,21 +181,21 @@ Flag any urgent findings with ⚠️.
 ## 6. STRUCTURED FINDINGS FOR LOCALIZATION (JSON)
 At the end of your response, provide findings with normalized bounding box coordinates in the following JSON format:
 ```json
-{
+{{
   "findings": [
-    {
+    {{
       "description": "[brief finding name]",
-      "normalized_box": {
+      "normalized_box": {{
         "x": 0.0,
         "y": 0.0,
         "w": 1.0,
         "h": 1.0
-      },
+      }},
       "confidence": 0.85,
       "significance": "CRITICAL|SIGNIFICANT|INCIDENTAL"
-    }
+    }}
   ]
-}
+}}
 ```
 Where:
 - normalized_box: x,y are top-left coordinates (0-1 scale), w,h are width/height (0-1 scale). 0=left/top, 1=right/bottom.
@@ -187,25 +204,32 @@ Where:
 
 Example for a chest X-ray with right lower lobe opacity:
 ```json
-{
+{{
   "findings": [
-    {
+    {{
       "description": "Right lower lobe opacity",
-      "normalized_box": {"x": 0.55, "y": 0.45, "w": 0.35, "h": 0.40},
+      "normalized_box": {{"x": 0.55, "y": 0.45, "w": 0.35, "h": 0.40}},
       "confidence": 0.88,
       "significance": "SIGNIFICANT"
-    }
+    }}
   ]
-}
+}}
 ```
-"""
+""".format(
+            modality=modality.upper(),
+            context=context_str,
+            complaint=complaint_str,
+            symptoms=symptoms_str,
+            region=body_region_str
+        )
         
         # Sampling parameters for medical analysis
         sampling_params = SamplingParams(
             temperature=0.3,
             top_p=0.9,
             max_tokens=1536,
-            stop=["<|end|>", "<|eot_id|>"]
+            repetition_penalty=1.2,  # Prevent token repetition loops
+            stop=["<|end|>", "<|eot_id|>", "\n\n\n"]  # Stop on triple newline (unusual pattern)
         )
         
         # Generate with multimodal input
@@ -220,8 +244,10 @@ Example for a chest X-ray with right lower lobe opacity:
         )
         
         response = outputs[0].outputs[0].text
-        
-        # Post-process with clinical correlator if symptoms provided
+
+        # FILTER: Detect and truncate infinite repetitions (model stuck in loop)
+        response = self._truncate_infinite_repetition(response)
+
         correlation_result = None
         if patient_symptoms:
             from .clinical_correlation import get_clinical_correlator
@@ -247,10 +273,76 @@ Example for a chest X-ray with right lower lobe opacity:
         
         if correlation_result:
             result["clinical_correlation"] = correlation_result.to_dict()
-        
+
         return result
-    
-    def _extract_findings_from_response(self, response: str) -> list[str]:
+
+    def _truncate_infinite_repetition(self, response: str) -> str:
+        """
+        Detect and truncate infinite repetition patterns (model stuck in loop).
+        Handles: identical repetitions, alternating patterns, and other loops.
+        Returns truncated response if repetition detected, otherwise returns original.
+        """
+        lines = response.split('\n')
+        if len(lines) < 5:
+            return response
+
+        # Pattern 1: Same line repeated 5+ times consecutively
+        line_counts = {}
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped and len(stripped) > 10:
+                if i > 0 and lines[i-1].strip() == stripped:
+                    if stripped not in line_counts:
+                        line_counts[stripped] = 0
+                    line_counts[stripped] += 1
+
+        for repeated_line, count in line_counts.items():
+            if count >= 5:
+                for i, line in enumerate(lines):
+                    if line.strip() == repeated_line and i > 0:
+                        is_repetition = all(
+                            lines[i+j].strip() == repeated_line
+                            for j in range(1, min(4, len(lines)-i))
+                        )
+                        if is_repetition:
+                            return '\n'.join(lines[:i])
+
+        # Pattern 2: Two lines alternating 4+ times (e.g., A, B, A, B, A, B, A, B)
+        for i in range(len(lines) - 7):  # Need at least 8 lines for alternation check
+            stripped_i = lines[i].strip()
+            if not stripped_i or len(stripped_i) <= 10:
+                continue
+
+            # Look ahead to see if this line alternates with another
+            for j in range(i + 1, min(i + 4, len(lines))):
+                stripped_j = lines[j].strip()
+                if not stripped_j or len(stripped_j) <= 10:
+                    continue
+
+                # Check if i and j alternate starting from i
+                alternation_count = 0
+                expect_i = True
+                for k in range(i, min(i + 8, len(lines))):
+                    curr = lines[k].strip()
+                    if expect_i:
+                        if curr == stripped_i:
+                            alternation_count += 1
+                            expect_i = False
+                        else:
+                            break
+                    else:
+                        if curr == stripped_j:
+                            alternation_count += 1
+                            expect_i = True
+                        else:
+                            break
+
+                # If we found 8+ alternations (4 full cycles of A-B pairs)
+                if alternation_count >= 8:
+                    return '\n'.join(lines[:i])
+
+        return response
+
         """Extract individual findings from model response text."""
         findings = []
         in_findings_section = False

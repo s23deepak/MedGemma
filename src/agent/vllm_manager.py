@@ -30,6 +30,26 @@ except ImportError:
     VLLM_AVAILABLE = False
     logger.warning("vLLM not installed. Run: uv pip install vllm")
 
+# Import vLLM configuration
+try:
+    from src.config.vllm_config import get_vllm_config, customize_config
+except ImportError:
+    logger.warning("vllm_config not found; using inline defaults")
+    get_vllm_config = lambda mode="local": {
+        "tensor_parallel_size": 1,
+        "gpu_memory_utilization": 0.85,
+        "max_model_len": 2048,
+        "max_num_batched_tokens": 256,
+        "max_num_seqs": 1,
+        "dtype": "bfloat16",
+        "quantization": "bitsandbytes",
+        "enforce_eager": True,
+        "enable_vision": True,
+        "enable_chunked_prefill": True,
+        "enable_prefix_caching": True,
+    }
+    customize_config = lambda base="local", **kw: {**get_vllm_config(base), **kw}
+
 ModelName = Literal["medgemma", "functiongemma", "medasr"]
 
 
@@ -57,24 +77,46 @@ class VLLMModelManager:
 
     def __init__(
         self,
-        gpu_memory_utilization: float = 0.85,
-        max_model_len: int = 4096,
-        max_num_batched_tokens: int = 1024,
-        quantization: str | None = "bitsandbytes",
-        enforce_eager: bool = True,
-        enable_vision: bool = True,
+        config: str | dict | None = None,
         load_functiongemma: bool = True,
         load_medasr: bool = True,
     ):
+        """
+        Initialize VLLMModelManager with flexible configuration.
+
+        Args:
+            config: Configuration mode or dict
+                - "local" (default): RTX 5060, batch_size=1, optimized for development
+                - "production": Higher throughput, batching, multi-concurrent requests
+                - dict: Custom configuration dict with vLLM parameters
+                - None: Uses VLLM_ENV env var (default: "local")
+            load_functiongemma: Load FunctionGemma model
+            load_medasr: Load MedASR model
+        """
         if not VLLM_AVAILABLE:
             raise ImportError("vLLM is not installed. Run: uv pip install vllm")
 
-        self.gpu_memory_utilization = gpu_memory_utilization
-        self.max_model_len = max_model_len
-        self.max_num_batched_tokens = max_num_batched_tokens
-        self.quantization = quantization
-        self.enforce_eager = enforce_eager
-        self.enable_vision = enable_vision
+        # Load configuration
+        if isinstance(config, dict):
+            cfg = config
+            config_mode = "custom"
+        else:
+            cfg = get_vllm_config(config)
+            config_mode = config or "local"
+
+        logger.info(f"Using vLLM configuration: {config_mode}")
+
+        # Store config parameters
+        self.gpu_memory_utilization = cfg.get("gpu_memory_utilization", 0.85)
+        self.max_model_len = cfg.get("max_model_len", 2048)
+        self.max_num_batched_tokens = cfg.get("max_num_batched_tokens", 256)
+        self.max_num_seqs = cfg.get("max_num_seqs", 1)
+        self.quantization = cfg.get("quantization", "bitsandbytes")
+        self.enforce_eager = cfg.get("enforce_eager", True)
+        self.enable_vision = cfg.get("enable_vision", True)
+        self.enable_chunked_prefill = cfg.get("enable_chunked_prefill", True)
+        self.enable_prefix_caching = cfg.get("enable_prefix_caching", True)
+        self.tensor_parallel_size = cfg.get("tensor_parallel_size", 1)
 
         self._vllm_engines: dict[str, LLM] = {}
         self._medasr = None
@@ -94,43 +136,54 @@ class VLLMModelManager:
 
     def _init_medgemma(self):
         logger.info(f"Loading MedGemma ({self.MEDGEMMA_ID}) into vLLM…")
+        logger.info(f"  max_num_batched_tokens={self.max_num_batched_tokens}, max_num_seqs={self.max_num_seqs}")
+
         # Encoder profiling images = max_num_batched_tokens / tokens_per_image (256).
         # Default 8192 → 32 images → ~3.4 GB activation OOM on 8 GB GPU.
-        # Setting max_num_batched_tokens=1024 → 4 images → ~0.4 GB → fits with 0.6 GB KV cache left.
-        # limit_mm_per_prompt={"image": 0} skips encoder entirely (no vision) — fallback if 1024 still OOMs.
+        # Setting max_num_batched_tokens=256 → 1 image → ~0.1 GB → fits easily on RTX 5060.
+        # limit_mm_per_prompt={"image": 0} skips encoder entirely (no vision) — fallback if OOM.
         mm_limit = {"image": 1} if self.enable_vision else {"image": 0}
         if not self.enable_vision:
             logger.info("Vision encoder disabled (enable_vision=False). Image inputs will use text-only path.")
+
         engine = LLM(
             model=self.MEDGEMMA_ID,
             gpu_memory_utilization=self.gpu_memory_utilization,
             max_model_len=self.max_model_len,
             max_num_batched_tokens=self.max_num_batched_tokens,
+            max_num_seqs=self.max_num_seqs,
             trust_remote_code=True,
             enforce_eager=self.enforce_eager,
             quantization=self.quantization,
             limit_mm_per_prompt=mm_limit,
             dtype="bfloat16",
+            enable_chunked_prefill=self.enable_chunked_prefill,
+            enable_prefix_caching=self.enable_prefix_caching,
         )
         engine.sleep(level=2)
         self._vllm_engines["medgemma"] = engine
         self._status["medgemma"] = "asleep"
-        logger.info("MedGemma loaded and sleeping")
+        logger.info("MedGemma loaded and sleeping (chunked prefill + prefix caching enabled)")
 
     def _init_functiongemma(self):
         logger.info(f"Loading FunctionGemma ({self.FUNCTIONGEMMA_ID}) into vLLM…")
+        logger.info(f"  max_num_seqs={self.max_num_seqs}")
+
         engine = LLM(
             model=self.FUNCTIONGEMMA_ID,
             gpu_memory_utilization=0.30,  # 270M needs much less headroom
             max_model_len=2048,
+            max_num_seqs=self.max_num_seqs,
             trust_remote_code=True,
             enforce_eager=self.enforce_eager,
             dtype="bfloat16",
+            enable_chunked_prefill=self.enable_chunked_prefill,
+            enable_prefix_caching=self.enable_prefix_caching,
         )
         engine.sleep(level=2)
         self._vllm_engines["functiongemma"] = engine
         self._status["functiongemma"] = "asleep"
-        logger.info("FunctionGemma loaded and sleeping")
+        logger.info("FunctionGemma loaded and sleeping (chunked prefill + prefix caching enabled)")
 
     def _init_medasr(self):
         try:
@@ -197,8 +250,13 @@ class VLLMModelManager:
     ) -> str:
         """Generate text with MedGemma (wakes up, then remains active).
 
-        When enable_vision=False (default on 8 GB GPUs), image inputs are
-        silently dropped and only the text prompt is submitted to vLLM.
+        Supports analysis of any medical image type (XRay, MRI, CT, pathology, ultrasound, etc.)
+        when enable_vision=True. Gracefully falls back to text-only analysis if vision fails.
+
+        For multimodal inputs:
+        - Accepts PIL Image objects (any format/modality)
+        - Converts to temp file (vLLM requirement)
+        - Passes to vLLM with proper multimodal format
         """
         self._ensure_awake("medgemma")
 
@@ -210,17 +268,58 @@ class VLLMModelManager:
         )
 
         if image is not None and self.enable_vision:
-            input_data = [{"prompt": prompt, "multi_modal_data": {"image": image}}]
+            import tempfile
+            from pathlib import Path
+
+            try:
+                # Save PIL image to temp file for vLLM
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    tmp_path = tmp.name
+                    image.save(tmp_path, format="JPEG")
+
+                logger.debug(f"Saved image to {tmp_path} for multimodal processing")
+
+                try:
+                    # vLLM multimodal format: pass request dict with image in multi_modal_data
+                    outputs = self._vllm_engines["medgemma"].generate(
+                        [
+                            {
+                                "prompt": prompt,
+                                "multi_modal_data": {"image": tmp_path}
+                            }
+                        ],
+                        sampling_params
+                    )
+                    result = outputs[0].outputs[0].text
+                    # FILTER: Detect and truncate infinite repetitions (model stuck in loop)
+                    result = self._truncate_infinite_repetition(result)
+                    logger.debug(f"Vision analysis completed ({len(result)} chars)")
+                    return result
+
+                finally:
+                    # Always clean up temp file
+                    try:
+                        Path(tmp_path).unlink()
+                    except Exception as cleanup_err:
+                        logger.debug(f"Failed to clean up temp image: {cleanup_err}")
+
+            except Exception as e:
+                logger.warning(f"Multimodal analysis failed ({type(e).__name__}: {e}), falling back to text-only")
+                # Fallback: analyze based on prompt context only (no image)
+                outputs = self._vllm_engines["medgemma"].generate([prompt], sampling_params)
+                result = outputs[0].outputs[0].text
+                # FILTER: Detect and truncate infinite repetitions (model stuck in loop)
+                result = self._truncate_infinite_repetition(result)
+                return result
+
         else:
             if image is not None and not self.enable_vision:
                 logger.warning(
-                    "Image passed to generate_medgemma() but enable_vision=False. "
-                    "Processing as text-only prompt."
+                    "Image provided but enable_vision=False. Processing as text-only analysis. "
+                    "Enable vision in vllm_config.py or pass enable_vision=True to VLLMModelManager()."
                 )
-            input_data = [prompt]
-
-        outputs = self._vllm_engines["medgemma"].generate(input_data, sampling_params)
-        return outputs[0].outputs[0].text
+            outputs = self._vllm_engines["medgemma"].generate([prompt], sampling_params)
+            return outputs[0].outputs[0].text
 
     def generate_functiongemma(
         self,
@@ -318,12 +417,24 @@ class VLLMModelManager:
         body_region: str = "",
     ) -> dict:
         """
-        Analyze a medical image with MedGemma.
+        Analyze any medical image with MedGemma.
+        Supports all medical image types: XRay, MRI, CT, Ultrasound, Pathology, etc.
         API-compatible with MedGemmaVLLMAgent.analyze_image().
 
         When enable_vision=False (default on 8 GB GPUs), the image file is not
         passed to the model; instead a clinical-context-only differential is
         generated from the text inputs.
+
+        Args:
+            image_path: Path to medical image (JPEG, PNG, etc.)
+            clinical_context: Clinical context (findings, symptoms, history)
+            modality: Image type (xray, mri, ct, ultrasound, pathology, etc.)
+            patient_symptoms: List of patient symptoms
+            chief_complaint: Primary reason for imaging
+            body_region: Body region being imaged
+
+        Returns:
+            Dict with analysis, modality, context, and vision_enabled flag
         """
         from PIL import Image as PILImage
 
@@ -336,63 +447,58 @@ class VLLMModelManager:
 
         if self.enable_vision:
             image = PILImage.open(image_path).convert("RGB")
-            prompt = f"""Analyze this {modality.upper()} image for a clinical encounter.
 
-Clinical Context: {clinical_context or 'Not provided'}
-Patient's Chief Complaint: {complaint_str}
-Patient's Reported Symptoms: {symptoms_str}
-Body Region: {body_region or 'Not specified'}
+            # Map modality to appropriate specialist
+            specialist_map = {
+                "xray": "radiologist",
+                "ct": "radiologist",
+                "mri": "radiologist",
+                "ultrasound": "sonographer",
+                "pathology": "pathologist",
+                "microscopy": "pathologist",
+                "endoscopy": "gastroenterologist",
+                "ecg": "cardiologist",
+                "eeg": "neurologist",
+            }
+            specialist = specialist_map.get(modality.lower(), "medical imaging specialist")
 
-Please provide a structured analysis:
+            prompt = f"""You are an expert {specialist}. Analyze this {modality.upper()} image and provide a detailed clinical report.
 
-## 1. IMAGE QUALITY & ARTIFACTS
-- Overall Quality: [diagnostic / acceptable / degraded / non-diagnostic]
-- Artifacts Found: List any artifacts found (or "None significant")
-- Impact on Interpretation: [none / limited / significant]
+CLINICAL CONTEXT:
+- Chief Complaint: {complaint_str}
+- Patient Symptoms: {symptoms_str}
+- Body Region: {body_region or 'Not specified'}
+- Additional Context: {clinical_context or 'None provided'}
 
-## 2. KEY FINDINGS
-List all observable findings by clinical significance.
+ANALYSIS INSTRUCTIONS:
+1. Assess image quality and any artifacts
+2. Describe all visible findings
+3. Correlate findings with the clinical context
+4. List differential diagnoses in order of likelihood
+5. Provide recommendations for next steps
+6. Flag any urgent/critical findings clearly
 
-## 3. CLINICAL CORRELATION
-Classify each finding as CLINICALLY CORRELATED or INCIDENTAL.
-Note: Degenerative changes common in asymptomatic populations must be correlated with symptoms.
-
-## 4. DIFFERENTIAL CONSIDERATIONS
-Possible diagnoses prioritised by clinical correlation.
-
-## 5. RECOMMENDATIONS
-Next steps for correlated findings; follow-up for incidental findings.
-
-Flag urgent findings with ⚠️."""
+Provide a structured clinical report. Be specific and concrete - do not use placeholder text or generic templates."""
         else:
             # Text-only mode: reason from clinical context without the actual image.
             # This happens when enable_vision=False (8 GB GPU — encoder disabled to save VRAM).
             image = None
-            prompt = f"""A {modality.upper()} image has been ordered for a clinical encounter.
-Note: Direct image analysis is unavailable in this mode. The following is a clinical
-reasoning summary based on provided context only — NOT a radiological interpretation.
+            prompt = f"""A {modality.upper()} image has been ordered for clinical evaluation.
 
-Modality: {modality.upper()}
-Clinical Context: {clinical_context or 'Not provided'}
-Chief Complaint: {complaint_str}
-Reported Symptoms: {symptoms_str}
-Body Region: {body_region or 'Not specified'}
+CLINICAL CONTEXT:
+- Chief Complaint: {complaint_str}
+- Patient Symptoms: {symptoms_str}
+- Body Region: {body_region or 'Not specified'}
+- Additional Context: {clinical_context or 'None provided'}
 
-Based on the clinical context:
+Based on this clinical context alone, provide:
+1. Key clinical findings that should be evaluated on imaging
+2. Likely diagnoses to consider
+3. What a radiologist should specifically assess
+4. Recommended follow-up actions
 
-## 1. CLINICAL FINDINGS (from history)
-Summarise relevant findings from the clinical context.
-
-## 2. DIFFERENTIAL CONSIDERATIONS
-Possible diagnoses based on history and symptom presentation.
-
-## 3. RECOMMENDED IMAGING REVIEW
-What a radiologist should specifically evaluate on the {modality.upper()}.
-
-## 4. NEXT STEPS
-Follow-up actions based on the clinical presentation.
-
-⚠️ Note: This response is based on text context only. Actual {modality.upper()} review by a radiologist is required."""
+Note: This analysis is based on clinical context only, not direct image interpretation.
+Actual radiological review is required for definitive diagnosis."""
 
         response = self.generate_medgemma(prompt, image=image, temperature=0.3, max_tokens=1536)
 

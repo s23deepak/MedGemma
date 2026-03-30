@@ -5,6 +5,8 @@ Tracks request latency, throughput, errors, and system health.
 
 import logging
 import time
+import multiprocessing
+import os
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -151,6 +153,16 @@ class MetricsCollector:
         """Start Prometheus metrics server."""
         if not PROMETHEUS_AVAILABLE:
             logger.warning("Prometheus not available - metrics server not started")
+            return
+
+        # In multi-worker uvicorn deployments, each worker imports the module.
+        # Only allow the top-level process to bind the sidecar metrics port.
+        if multiprocessing.current_process().name != "MainProcess":
+            logger.info("Skipping Prometheus metrics sidecar in worker process")
+            return
+
+        if os.environ.get("DISABLE_PROMETHEUS_SIDECAR", "false").lower() in ("1", "true", "yes"):
+            logger.info("Prometheus metrics sidecar disabled via DISABLE_PROMETHEUS_SIDECAR")
             return
 
         try:

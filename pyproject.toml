@@ -26,6 +26,9 @@ dependencies = [
     "websockets>=16.0",
     "firebase-admin>=6.6.0",
     "langgraph>=0.2.0",
+    "slowapi>=0.1.9",
+    "prometheus-client>=0.24.1",
+    "uvloop>=0.22.1",
 ]
 
 [project.optional-dependencies]
