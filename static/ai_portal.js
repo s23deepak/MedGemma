@@ -770,49 +770,180 @@ async function sendMessage() {
 
     try {
         const requestBody = buildRequestBody(msg);
-        const res = await fetch('/api/ai-portal/chat', {
+        const res = await fetch('/api/ai-portal/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestBody),
         });
 
         if (!res.ok) {
+            // Fallback to non-streaming endpoint
+            if (res.status === 404) {
+                return await sendMessageLegacy(requestBody);
+            }
             const err = await res.json().catch(() => ({ detail: res.statusText }));
             throw new Error(err.detail || 'Request failed');
         }
 
-        const data = await res.json();
         hideTyping();
 
-        const assistantMsg = {
-            role: 'assistant',
-            content: data.response || '(No response)',
-            pubmedContext: data.pubmed_context || null,
-            aiAnnotations: data.ai_annotations || [],  // NEW
-            clinicalMeta: data.clinical_meta || null,  // structured metadata
-        };
+        // Create streaming bubble
+        const { div: streamDiv, bubble: streamBubble } = createStreamingBubble();
 
-        // Store AI annotations in portal state for canvas rendering
-        if (data.ai_annotations && data.ai_annotations.length > 0) {
-            portalState.aiAnnotations = data.ai_annotations;
-            redrawAnnotations();
-            showToast(`${data.ai_annotations.length} AI finding(s) detected`);
+        let accumulatedText = '';
+        let renderScheduled = false;
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentEvent = 'token';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (line.startsWith('event:')) {
+                    currentEvent = line.slice(6).trim();
+                } else if (line.startsWith('data:')) {
+                    const raw = line.slice(5).trim();
+                    if (!raw) continue;
+                    try {
+                        const data = JSON.parse(raw);
+                        if (currentEvent === 'token') {
+                            accumulatedText += (data.text || '');
+                            if (!renderScheduled) {
+                                renderScheduled = true;
+                                requestAnimationFrame(() => {
+                                    updateStreamingBubble(streamBubble, accumulatedText);
+                                    scrollChatToBottom();
+                                    renderScheduled = false;
+                                });
+                            }
+                        } else if (currentEvent === 'response_complete') {
+                            finalizeStreamingBubble(streamDiv, streamBubble, data);
+                        } else if (currentEvent === 'pubmed') {
+                            appendPubmedToStreamDiv(streamDiv, data);
+                        } else if (currentEvent === 'error') {
+                            accumulatedText += `\n\n**Error:** ${data.detail}`;
+                            updateStreamingBubble(streamBubble, accumulatedText);
+                        }
+                    } catch (_) { /* skip unparseable lines */ }
+                }
+            }
         }
 
-        portalState.chatHistory.push(assistantMsg);
-        renderMessage(assistantMsg);
+        // Push final message to history
+        portalState.chatHistory.push({
+            role: 'assistant',
+            content: accumulatedText,
+        });
 
     } catch (e) {
         hideTyping();
-        const errMsg = {
-            role: 'assistant',
-            content: `Error: ${e.message}`
-        };
+        const errMsg = { role: 'assistant', content: `Error: ${e.message}` };
         portalState.chatHistory.push(errMsg);
         renderMessage(errMsg);
     } finally {
         portalState.isGenerating = false;
         document.getElementById('sendBtn').disabled = false;
+        scrollChatToBottom();
+    }
+}
+
+async function sendMessageLegacy(requestBody) {
+    /** Non-streaming fallback for older server versions. */
+    const res = await fetch('/api/ai-portal/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || 'Request failed');
+    }
+    const data = await res.json();
+    hideTyping();
+    const assistantMsg = {
+        role: 'assistant',
+        content: data.response || '(No response)',
+        pubmedContext: data.pubmed_context || null,
+        aiAnnotations: data.ai_annotations || [],
+        clinicalMeta: data.clinical_meta || null,
+    };
+    if (data.ai_annotations && data.ai_annotations.length > 0) {
+        portalState.aiAnnotations = data.ai_annotations;
+        redrawAnnotations();
+        showToast(`${data.ai_annotations.length} AI finding(s) detected`);
+    }
+    portalState.chatHistory.push(assistantMsg);
+    renderMessage(assistantMsg);
+}
+
+function createStreamingBubble() {
+    const container = document.getElementById('chatMessages');
+    const div = document.createElement('div');
+    div.className = 'chat-msg assistant';
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble markdown';
+    bubble.innerHTML = '<span class="streaming-cursor">▊</span>';
+    div.innerHTML = '<span class="msg-role">MedGemma</span>';
+    div.appendChild(bubble);
+    container.appendChild(div);
+    scrollChatToBottom();
+    return { div, bubble };
+}
+
+function updateStreamingBubble(bubble, text) {
+    if (typeof marked !== 'undefined') {
+        bubble.innerHTML = marked.parse(text, { breaks: true }) + '<span class="streaming-cursor">▊</span>';
+    } else {
+        bubble.innerHTML = escapeHtml(text) + '<span class="streaming-cursor">▊</span>';
+    }
+}
+
+function finalizeStreamingBubble(div, bubble, data) {
+    // Replace with cleaned response (JSON blocks stripped)
+    const cleanedText = data.full_response || '';
+    if (typeof marked !== 'undefined') {
+        bubble.innerHTML = marked.parse(cleanedText, { breaks: true });
+    } else {
+        bubble.innerHTML = escapeHtml(cleanedText);
+    }
+
+    // AI annotations
+    if (data.ai_annotations && data.ai_annotations.length > 0) {
+        portalState.aiAnnotations = data.ai_annotations;
+        redrawAnnotations();
+        showToast(`${data.ai_annotations.length} AI finding(s) detected`);
+        const badge = document.createElement('span');
+        badge.className = 'msg-annotation-badge';
+        badge.style.cssText = 'background:#fee2e2; color:#991b1b; border: 1px solid #fca5a5;';
+        badge.textContent = ` ${data.ai_annotations.length} AI finding(s)`;
+        div.appendChild(badge);
+    }
+
+    // Clinical meta card
+    if (data.clinical_meta) {
+        const metaHtml = renderClinicalMetaCard(data.clinical_meta);
+        if (metaHtml) {
+            const metaDiv = document.createElement('div');
+            metaDiv.innerHTML = metaHtml;
+            div.appendChild(metaDiv);
+        }
+    }
+    scrollChatToBottom();
+}
+
+function appendPubmedToStreamDiv(div, pubmedContext) {
+    const pubmedHtml = renderPubmedContextInline(pubmedContext);
+    if (pubmedHtml) {
+        const pubmedDiv = document.createElement('div');
+        pubmedDiv.innerHTML = pubmedHtml;
+        div.appendChild(pubmedDiv);
         scrollChatToBottom();
     }
 }

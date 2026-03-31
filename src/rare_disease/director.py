@@ -173,6 +173,100 @@ class RareDiseaseDirector:
             generated_at=datetime.utcnow(),
         )
 
+    async def hunt_stream(self, case: RareCaseInput):
+        """TTT hunt that yields SSE-compatible event dicts at each phase boundary.
+
+        Events emitted:
+          progress   — {"message": str, "iteration"?: int}
+          hypothesis — RareDiseaseHypothesis.model_dump(mode="json")
+          convergence— {"converged": bool, "iterations": int, "reward": float}
+          done       — full RareDiseaseReport.model_dump(mode="json")
+        """
+        yield {"event": "progress", "data": {"message": "Extracting clinical case fingerprint..."}}
+        fp = self._extract_fingerprint(case)
+
+        seeds = get_seed_hypotheses(fp.symptoms)[:8]
+        yield {"event": "progress", "data": {"message": f"Found {len(seeds)} seed hypotheses from disease ontology"}}
+
+        yield {"event": "progress", "data": {"message": "Consulting LLM for additional rare disease candidates..."}}
+        llm_hyps = await self._generate_hypotheses_llm(fp, seeds)
+        all_hypotheses: list[str] = _dedup(seeds + llm_hyps)
+        yield {"event": "progress", "data": {"message": f"{len(all_hypotheses)} hypotheses to evaluate via TTT loop"}}
+
+        initial_count = len(all_hypotheses)
+        expansion_rounds: list[str] = []
+        evidence_cache: dict[str, dict] = {}
+        scored: list[RareDiseaseHypothesis] = []
+        converged = False
+        iterations_done = 0
+
+        for iteration in range(self.max_iterations):
+            iterations_done = iteration + 1
+            new_names = [h for h in all_hypotheses if h not in evidence_cache]
+            if new_names:
+                yield {"event": "progress", "data": {
+                    "message": f"Iteration {iterations_done}: fetching PubMed evidence for {len(new_names)} candidate(s)...",
+                    "iteration": iterations_done,
+                }}
+                new_evidence = await self._fetch_evidence_batch(new_names, fp)
+                evidence_cache.update(new_evidence)
+
+            yield {"event": "progress", "data": {
+                "message": f"Iteration {iterations_done}: scoring {len(all_hypotheses)} hypotheses...",
+                "iteration": iterations_done,
+            }}
+            scored = self._score_all(all_hypotheses, evidence_cache, fp)
+            best_reward = max(h.reward_score for h in scored) if scored else 0.0
+
+            if best_reward >= self.reward_threshold:
+                converged = True
+                break
+
+            if iteration + 1 < self.max_iterations:
+                yield {"event": "progress", "data": {
+                    "message": f"Best reward {best_reward:.2f} below threshold — expanding hypothesis pool...",
+                    "iteration": iterations_done,
+                }}
+                expanded, strategy = await self._expand_hypotheses(scored, fp, iteration)
+                expansion_rounds.append(strategy)
+                new_candidates = _dedup([h for h in expanded if h not in all_hypotheses])
+                if not new_candidates:
+                    converged = True
+                    break
+                all_hypotheses = all_hypotheses + new_candidates
+            else:
+                converged = best_reward >= self.reward_threshold
+
+        # Final ranking
+        scored.sort(key=lambda h: h.reward_score, reverse=True)
+        final = scored[:case.max_hypotheses]
+        conv_reward = final[0].reward_score if final else 0.0
+
+        # Emit hypotheses one by one (highest reward first)
+        for h in final:
+            yield {"event": "hypothesis", "data": h.model_dump(mode="json")}
+
+        yield {"event": "convergence", "data": {
+            "converged": converged,
+            "iterations": iterations_done,
+            "reward": round(conv_reward, 3),
+        }}
+
+        report = RareDiseaseReport(
+            hypotheses=final,
+            convergence=TTTConvergenceMetadata(
+                iterations_performed=iterations_done,
+                converged=converged,
+                initial_hypotheses_count=initial_count,
+                final_hypotheses_count=len(scored),
+                convergence_reward=conv_reward,
+                expansion_rounds=expansion_rounds,
+            ),
+            disclaimer=self.DISCLAIMER,
+            generated_at=datetime.utcnow(),
+        )
+        yield {"event": "done", "data": report.model_dump(mode="json")}
+
     # ------------------------------------------------------------------ #
     # Fingerprint extraction                                               #
     # ------------------------------------------------------------------ #

@@ -471,23 +471,139 @@
 
                 document.getElementById('results').style.display = 'block';
                 document.getElementById('loading').style.display = 'block';
-                document.getElementById('deliberationResults').style.display = 'none';
+                document.getElementById('deliberationResults').style.display = 'block';
                 document.getElementById('deliberateBtn').disabled = true;
+                document.getElementById('opinionsGrid').innerHTML = '';
+
+                const _opinions = [];
+                const body = JSON.stringify({ symptoms, patient_history: history, imaging_findings: imaging, num_rollouts: numRollouts, vitals, raw_note: rawNote });
 
                 try {
-                    const response = await fetch('/api/council/deliberate', {
+                    const resp = await fetch('/api/council/deliberate/stream', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ symptoms, patient_history: history, imaging_findings: imaging, num_rollouts: numRollouts, vitals, raw_note: rawNote })
+                        body,
                     });
-                    const data = await response.json();
-                    renderDeliberation(data);
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+                    const reader = resp.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    let currentEvent = '';
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop();
+                        for (const line of lines) {
+                            if (line.startsWith('event:')) {
+                                currentEvent = line.slice(6).trim();
+                            } else if (line.startsWith('data:')) {
+                                const payload = JSON.parse(line.slice(5).trim());
+                                if (currentEvent === 'start' || currentEvent === 'heartbeat') {
+                                    document.querySelector('#loading p').textContent = payload.message || 'Deliberating...';
+                                } else if (currentEvent === 'specialist') {
+                                    _opinions.push(payload);
+                                    _renderOpinionCard(payload, null);
+                                } else if (currentEvent === 'consensus') {
+                                    _applyConsensus(payload, _opinions);
+                                } else if (currentEvent === 'error') {
+                                    throw new Error(payload.detail || 'Unknown error');
+                                }
+                                currentEvent = '';
+                            }
+                        }
+                    }
                 } catch (error) {
-                    console.error('Error:', error);
-                    alert('Error running deliberation');
+                    console.warn('Streaming deliberation failed, falling back:', error);
+                    try {
+                        const response = await fetch('/api/council/deliberate', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body,
+                        });
+                        const data = await response.json();
+                        renderDeliberation(data);
+                    } catch (e) {
+                        alert('Error running deliberation: ' + e.message);
+                    }
                 } finally {
                     document.getElementById('loading').style.display = 'none';
                     document.getElementById('deliberateBtn').disabled = false;
+                }
+            }
+
+            function _renderOpinionCard(opinion, consensusDiagnosis) {
+                const grid = document.getElementById('opinionsGrid');
+                const agreed = consensusDiagnosis ? opinion.diagnosis === consensusDiagnosis : null;
+                const cls = agreed === null ? '' : (agreed ? 'agreed' : 'dissented');
+                const card = document.createElement('div');
+                card.id = 'opinion-' + opinion.opinion_id;
+                card.className = 'opinion-card ' + cls;
+                card.innerHTML = `
+                    <div class="opinion-header">
+                        <span class="opinion-id">${opinion.opinion_id}</span>
+                        <span class="urgency-badge urgency-${opinion.urgency}">${opinion.urgency}</span>
+                    </div>
+                    <div class="confidence-bar">
+                        <div class="confidence-fill" style="width: ${opinion.confidence * 100}%"></div>
+                    </div>
+                    <div style="font-size:0.85rem;color:var(--text-secondary);margin-top:0.25rem;">${opinion.confidence_percent} confidence</div>
+                    <div class="opinion-diagnosis">${opinion.diagnosis}</div>
+                    <div class="opinion-reasoning">${mdHtml(opinion.reasoning)}</div>
+                    <div class="opinion-tests">
+                        <strong>Recommended tests:</strong><br>
+                        ${(opinion.recommended_tests || []).map(t => `<span>${t}</span>`).join('')}
+                    </div>
+                `;
+                card.style.opacity = '0';
+                card.style.transform = 'translateY(8px)';
+                card.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+                grid.appendChild(card);
+                requestAnimationFrame(() => { card.style.opacity = '1'; card.style.transform = 'translateY(0)'; });
+            }
+
+            function _applyConsensus(c, opinions) {
+                document.getElementById('consensusDiagnosis').textContent = c.consensus_diagnosis;
+                document.getElementById('consensusStrength').textContent = c.consensus_strength + ' consensus';
+                document.getElementById('consensusConfidence').textContent = (c.consensus_confidence_percent || '') + ' confidence';
+                const card = document.getElementById('consensusCard');
+                if (c.consensus_strength === 'strong') {
+                    card.style.background = 'linear-gradient(135deg, #059669, #10b981)';
+                } else if (c.consensus_strength === 'moderate') {
+                    card.style.background = 'linear-gradient(135deg, #d97706, #f59e0b)';
+                } else {
+                    card.style.background = 'linear-gradient(135deg, #dc2626, #ef4444)';
+                }
+                // Re-render opinion cards with agreed/dissented coloring
+                document.getElementById('opinionsGrid').innerHTML = opinions.map(op => {
+                    const agreed = op.diagnosis === c.consensus_diagnosis;
+                    return `<div class="opinion-card ${agreed ? 'agreed' : 'dissented'}">
+                        <div class="opinion-header">
+                            <span class="opinion-id">${op.opinion_id}</span>
+                            <span class="urgency-badge urgency-${op.urgency}">${op.urgency}</span>
+                        </div>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width: ${op.confidence * 100}%"></div>
+                        </div>
+                        <div style="font-size:0.85rem;color:var(--text-secondary);margin-top:0.25rem;">${op.confidence_percent} confidence</div>
+                        <div class="opinion-diagnosis">${op.diagnosis}</div>
+                        <div class="opinion-reasoning">${mdHtml(op.reasoning)}</div>
+                        <div class="opinion-tests">
+                            <strong>Recommended tests:</strong><br>
+                            ${(op.recommended_tests || []).map(t => `<span>${t}</span>`).join('')}
+                        </div>
+                    </div>`;
+                }).join('');
+                document.getElementById('discussionContent').innerHTML = mdHtml(c.discussion_summary || '');
+                const pm = c.pubmed_insights;
+                if (pm && pm.status === 'completed') {
+                    document.getElementById('pubmedInsightsSection').style.display = 'block';
+                    document.getElementById('pubmedInsightsContent').innerHTML = renderPubmedInsightsCouncil(pm);
+                } else {
+                    document.getElementById('pubmedInsightsSection').style.display = 'none';
                 }
             }
 

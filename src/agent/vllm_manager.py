@@ -15,6 +15,8 @@ Sleep levels:
 
 import asyncio
 import logging
+import time
+from collections import deque
 from pathlib import Path
 from typing import Literal
 
@@ -123,6 +125,9 @@ class VLLMModelManager:
         self._active: ModelName | None = None
         self._status: dict[str, str] = {}  # "unloaded" | "asleep" | "awake"
         self._lock = asyncio.Lock()
+
+        # Token usage tracking (last 100 requests)
+        self._inference_stats: deque[dict] = deque(maxlen=100)
 
         # Load models sequentially. Each sleeps immediately after init so that
         # the next model can use the freed GPU memory.
@@ -269,41 +274,29 @@ class VLLMModelManager:
 
         if image is not None and self.enable_vision:
             try:
-                # vLLM multimodal: pass PIL image directly in multi_modal_data
+                t0 = time.time()
                 outputs = self._vllm_engines["medgemma"].generate(
-                    [
-                        {
-                            "prompt": prompt,
-                            "multi_modal_data": {"image": image}
-                        }
-                    ],
+                    [{"prompt": prompt, "multi_modal_data": {"image": image}}],
                     sampling_params
                 )
+                elapsed = time.time() - t0
                 result = outputs[0].outputs[0].text
-                # FILTER: Detect and truncate infinite repetitions (model stuck in loop)
                 result = self._truncate_infinite_repetition(result)
+                self._record_stats(outputs[0], elapsed, max_tokens, multimodal=True)
                 logger.debug(f"Vision analysis completed ({len(result)} chars)")
                 return result
 
             except Exception as e:
                 logger.warning(f"Multimodal analysis failed ({type(e).__name__}: {e}), falling back to text-only")
-                # Strip image-analysis instructions from prompt for text-only fallback
                 import re
-                prompt = re.sub(
-                    r'Analyze this \w+ image[\.,]?\s*',
-                    '',
-                    prompt
-                )
-                prompt = re.sub(
-                    r'focusing on the annotated region\(s\)[\.,]?\s*',
-                    '',
-                    prompt
-                )
-                # Fallback: analyze based on prompt context only (no image)
+                prompt = re.sub(r'Analyze this \w+ image[\.,]?\s*', '', prompt)
+                prompt = re.sub(r'focusing on the annotated region\(s\)[\.,]?\s*', '', prompt)
+                t0 = time.time()
                 outputs = self._vllm_engines["medgemma"].generate([prompt], sampling_params)
+                elapsed = time.time() - t0
                 result = outputs[0].outputs[0].text
-                # FILTER: Detect and truncate infinite repetitions (model stuck in loop)
                 result = self._truncate_infinite_repetition(result)
+                self._record_stats(outputs[0], elapsed, max_tokens, multimodal=False)
                 return result
 
         else:
@@ -312,8 +305,75 @@ class VLLMModelManager:
                     "Image provided but enable_vision=False. Processing as text-only analysis. "
                     "Enable vision in vllm_config.py or pass enable_vision=True to VLLMModelManager()."
                 )
+            t0 = time.time()
             outputs = self._vllm_engines["medgemma"].generate([prompt], sampling_params)
-            return outputs[0].outputs[0].text
+            elapsed = time.time() - t0
+            result = outputs[0].outputs[0].text
+            self._record_stats(outputs[0], elapsed, max_tokens, multimodal=False)
+            return result
+
+    def generate_medgemma_stream(
+        self,
+        prompt: str,
+        image=None,
+        temperature: float = 0.4,
+        max_tokens: int = 2048,
+    ):
+        """Simulated streaming: generate full response then yield in word batches."""
+        full_response = self.generate_medgemma(
+            prompt=prompt,
+            image=image,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        # Split into word batches and yield
+        words = full_response.split(" ")
+        for i in range(0, len(words), 4):
+            chunk = " ".join(words[i:i + 4])
+            if i > 0:
+                chunk = " " + chunk
+            yield chunk
+
+    def _record_stats(self, request_output, elapsed: float, max_tokens: int, multimodal: bool):
+        """Record token usage and latency for an inference call."""
+        try:
+            prompt_tokens = len(request_output.prompt_token_ids)
+            completion_tokens = len(request_output.outputs[0].token_ids)
+            self._inference_stats.append({
+                "ts": time.time(),
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+                "max_tokens_configured": max_tokens,
+                "latency_s": round(elapsed, 2),
+                "tokens_per_sec": round(completion_tokens / elapsed, 1) if elapsed > 0 else 0,
+                "multimodal": multimodal,
+            })
+        except Exception:
+            pass  # Non-fatal
+
+    def get_inference_stats(self) -> dict:
+        """Return aggregated token usage stats over the last 100 requests."""
+        if not self._inference_stats:
+            return {"requests": 0}
+        stats = list(self._inference_stats)
+        n = len(stats)
+        avg = lambda key: round(sum(s[key] for s in stats) / n, 1)
+        mx = lambda key: max(s[key] for s in stats)
+        return {
+            "requests": n,
+            "backend": "vllm",
+            "model": self.MEDGEMMA_ID,
+            "avg_prompt_tokens": avg("prompt_tokens"),
+            "avg_completion_tokens": avg("completion_tokens"),
+            "avg_total_tokens": avg("total_tokens"),
+            "max_completion_tokens": mx("completion_tokens"),
+            "avg_latency_s": avg("latency_s"),
+            "avg_tokens_per_sec": avg("tokens_per_sec"),
+            "max_tokens_configured": stats[-1]["max_tokens_configured"],
+            "multimodal_requests": sum(1 for s in stats if s["multimodal"]),
+            "recent_10": stats[-10:],
+        }
 
     def _truncate_infinite_repetition(self, response: str) -> str:
         """Detect and truncate infinite repetition patterns (model stuck in loop)."""

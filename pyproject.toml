@@ -29,6 +29,7 @@ dependencies = [
     "slowapi>=0.1.9",
     "prometheus-client>=0.24.1",
     "uvloop>=0.22.1",
+    "sse-starlette>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +43,11 @@ vllm = [
 # Falls back to TF-IDF (numpy) if not installed.
 rag = [
     "sentence-transformers>=2.2.0",
+]
+# Gemini Cloud API for fast inference (no GPU required)
+# uv pip install "medgemma-assistant[gemini]"
+gemini = [
+    "google-generativeai>=0.8.0",
 ]
 
 

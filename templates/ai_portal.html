@@ -529,6 +529,18 @@
             40% { transform: translateY(-5px); }
         }
 
+        .streaming-cursor {
+            display: inline;
+            animation: blink-cursor 0.8s step-end infinite;
+            color: var(--accent);
+            font-weight: 300;
+        }
+
+        @keyframes blink-cursor {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
         /* Chat input */
         .chat-input-area {
             padding: 0.75rem 1.25rem;

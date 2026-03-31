@@ -15,9 +15,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sse_starlette.sse import EventSourceResponse
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -156,6 +157,55 @@ def load_models_lazy():
         if use_simulated:
             logger.info("Running in SIMULATED mode - no GPU models loaded")
             agent = None  # Will use mock responses
+        elif os.environ.get("GEMINI_API_KEY"):
+            # ── Gemini Cloud API: fast inference, no GPU required ──
+            try:
+                from src.agent.gemini_agent import GeminiAgent
+                gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+                agent = GeminiAgent(
+                    api_key=os.environ["GEMINI_API_KEY"],
+                    model_name=gemini_model,
+                )
+                logger.info(f"Using Gemini Cloud API ({gemini_model})")
+            except ImportError:
+                logger.warning(
+                    "google-generativeai not installed. "
+                    "Run: uv pip install 'medgemma-assistant[gemini]'. "
+                    "Falling back to local model."
+                )
+                # Fall through to vLLM or Transformers below
+                if use_vllm:
+                    try:
+                        from src.agent.vllm_manager import get_vllm_manager, is_vllm_manager_available
+                        if is_vllm_manager_available():
+                            vllm_manager = get_vllm_manager()
+                            agent = vllm_manager
+                        else:
+                            raise ImportError("vLLM not available")
+                    except Exception as e:
+                        logger.warning(f"VLLMModelManager failed: {e}. Falling back to Transformers.")
+                        from src.agent import MedGemmaAgent
+                        agent = MedGemmaAgent(load_in_4bit=True)
+                else:
+                    from src.agent import MedGemmaAgent
+                    agent = MedGemmaAgent(load_in_4bit=True)
+            except Exception as e:
+                logger.error(f"Gemini initialization failed: {e}. Falling back to local model.")
+                if use_vllm:
+                    try:
+                        from src.agent.vllm_manager import get_vllm_manager, is_vllm_manager_available
+                        if is_vllm_manager_available():
+                            vllm_manager = get_vllm_manager()
+                            agent = vllm_manager
+                        else:
+                            raise ImportError("vLLM not available")
+                    except Exception as e2:
+                        logger.warning(f"VLLMModelManager failed: {e2}. Falling back to Transformers.")
+                        from src.agent import MedGemmaAgent
+                        agent = MedGemmaAgent(load_in_4bit=True)
+                else:
+                    from src.agent import MedGemmaAgent
+                    agent = MedGemmaAgent(load_in_4bit=True)
         elif use_vllm:
             # ── vLLM sleep-mode manager: FunctionGemma + MedGemma + MedASR ──
             try:
@@ -1281,6 +1331,92 @@ async def council_iterative_deliberate(request: Request):
     return result.to_dict()
 
 
+@app.post("/api/council/deliberate/stream")
+async def council_deliberate_stream(request: Request):
+    """SSE streaming deliberation — emits specialist opinions one by one as they arrive."""
+    from src.council import get_diagnostic_council
+    data = await request.json()
+    symptoms        = data.get("symptoms", [])
+    patient_history = data.get("patient_history", "")
+    imaging_findings= data.get("imaging_findings", "")
+    num_rollouts    = data.get("num_rollouts", 5)
+    vitals          = data.get("vitals")
+    raw_note        = data.get("raw_note", "")
+
+    async def event_stream():
+        yield {"event": "start", "data": json.dumps({
+            "message": f"Assembling {num_rollouts}-specialist council...",
+            "num_rollouts": num_rollouts,
+        })}
+
+        council = get_diagnostic_council(agent=agent, num_rollouts=num_rollouts, pubmed_agent=pubmed_agent)
+        result_holder: dict = {}
+        error_holder: dict = {}
+
+        def _run_deliberate():
+            try:
+                result_holder["result"] = council.deliberate(
+                    symptoms=symptoms,
+                    patient_history=patient_history,
+                    imaging_findings=imaging_findings,
+                    vitals=vitals,
+                    raw_note=raw_note,
+                )
+            except Exception as exc:
+                error_holder["error"] = exc
+
+        loop = asyncio.get_event_loop()
+        future = loop.run_in_executor(None, _run_deliberate)
+
+        heartbeat_messages = [
+            "Analyzing clinical presentation...",
+            "Generating specialist opinions...",
+            "Cross-referencing differential diagnoses...",
+            "Weighing clinical evidence...",
+            "Calculating consensus...",
+        ]
+        elapsed = 0
+        msg_idx = 0
+        while not future.done():
+            await asyncio.sleep(2)
+            elapsed += 2
+            msg = heartbeat_messages[min(msg_idx, len(heartbeat_messages) - 1)]
+            msg_idx += 1
+            yield {"event": "heartbeat", "data": json.dumps({"elapsed": elapsed, "message": msg})}
+
+        await future
+
+        if "error" in error_holder:
+            yield {"event": "error", "data": json.dumps({"detail": str(error_holder["error"])})}
+            yield {"event": "done", "data": "{}"}
+            return
+
+        d = result_holder["result"].to_dict()
+
+        # Stream specialist opinions with a short visual delay between each
+        for opinion in d.get("opinions", []):
+            yield {"event": "specialist", "data": json.dumps(opinion)}
+            await asyncio.sleep(0.15)
+
+        yield {"event": "consensus", "data": json.dumps({
+            "consensus_diagnosis":          d.get("consensus_diagnosis"),
+            "consensus_strength":           d.get("consensus_strength"),
+            "consensus_confidence":         d.get("consensus_confidence"),
+            "consensus_confidence_percent": d.get("consensus_confidence_percent"),
+            "discussion_summary":           d.get("discussion_summary"),
+            "most_urgent":                  d.get("most_urgent"),
+            "final_recommendation":         d.get("final_recommendation"),
+            "pubmed_insights":              d.get("pubmed_insights"),
+        })}
+
+        if audit_logger:
+            audit_logger.log("COUNCIL_DELIBERATION", "deliberate_stream",
+                             details={"symptom_count": len(symptoms)})
+        yield {"event": "done", "data": "{}"}
+
+    return EventSourceResponse(event_stream())
+
+
 @app.get("/api/council/history")
 async def get_council_history():
     """Get deliberation history."""
@@ -1936,7 +2072,7 @@ async def ai_portal_chat(request: Request):
                     prompt=prompt,
                     image=pil_image,
                     temperature=0.4,
-                    max_tokens=1536,
+                    max_tokens=768,
                 )
             elif hasattr(agent, "chat"):
                 # ── Transformers MedGemmaAgent path ───────────────────────
@@ -2088,6 +2224,294 @@ async def ai_portal_chat(request: Request):
         "simulated": agent is None,
         "pubmed_context": pubmed_context,
     }
+
+
+# ── Shared helpers for AI portal prompt building & PubMed ──────────────────
+
+def _build_ai_portal_prompt(message, history, patient_context, image_data, image_modality, annotations):
+    """Build prompt and decode image for AI portal endpoints. Returns (prompt, pil_image)."""
+    import base64 as _b64
+    import io
+
+    parts: list[str] = []
+
+    parts.append(
+        "You are MedGemma, a clinical AI assistant helping Doctors and Residents. "
+        "Provide accurate, evidence-based clinical insights. "
+        "Always note diagnostic uncertainty and recommend clinical correlation. "
+        "IMPORTANT: Only analyze medical images when an actual image is provided in the current message. "
+        "If the user asks about an image but none was uploaded, ask them to upload it first. "
+        "Do NOT fabricate or hallucinate image analyses. "
+        "RESPONSE FORMAT: Use ## headers for sections, bullet lists (-) for findings, and **bold** for key clinical terms. "
+        "At the very end of your response, append exactly this JSON on its own line (no code fences): "
+        '{"clinical_meta": {"key_points": ["..."], "warnings": [], "confidence": "high|moderate|low", "suggested_actions": ["..."]}}'
+    )
+
+    if patient_context:
+        if isinstance(patient_context, dict) and "freeText" in patient_context:
+            parts.append(f"\n## Patient Information (manual entry)\n{patient_context['freeText']}")
+        elif isinstance(patient_context, dict):
+            p = patient_context.get("patient", {})
+            if p:
+                parts.append(
+                    f"\n## Patient\n{p.get('name','Unknown')}, "
+                    f"{p.get('age','?')} yr, {p.get('gender','?')}"
+                )
+            conditions = patient_context.get("conditions", [])
+            if conditions:
+                cond_names = ", ".join(c.get("name", "") for c in conditions if c.get("name"))
+                parts.append(f"**Conditions:** {cond_names}")
+            medications = patient_context.get("medications", [])
+            if medications:
+                med_names = ", ".join(m.get("name", "") for m in medications if m.get("name"))
+                parts.append(f"**Medications:** {med_names}")
+            allergies = patient_context.get("allergies", [])
+            if allergies:
+                allergy_names = ", ".join(a.get("substance", "") for a in allergies if a.get("substance"))
+                parts.append(f"**Allergies:** {allergy_names}")
+
+    if history:
+        parts.append("\n## Conversation History")
+        for turn in history[-8:]:
+            role_label = "Doctor" if turn["role"] == "user" else "MedGemma"
+            content = turn['content']
+            if not image_data and role_label == "MedGemma":
+                is_image_analysis = any(
+                    content.strip().startswith(prefix)
+                    for prefix in ["Heart size:", "Findings:", "Overall Impression:",
+                                   "The image shows", "Brain parenchyma:", "Liver:",
+                                   "Rhythm:", "Ventricles:", "Image Analysis"]
+                )
+                if is_image_analysis:
+                    content = "[Previous image analysis — omitted to prevent model confusion when no current image provided]"
+            parts.append(f"**{role_label}:** {content}")
+
+    if annotations:
+        ann_desc = "; ".join(
+            f"{a.get('label','Region')} at ({a['x']:.2f},{a['y']:.2f}) "
+            f"size {a['w']:.2f}x{a['h']:.2f}"
+            for a in annotations
+        )
+        parts.append(
+            f"\n## Image Annotations\n"
+            f"The physician has annotated the following region(s) for focused analysis:\n{ann_desc}\n"
+            f"Please pay particular attention to these marked areas in your analysis."
+        )
+
+    if image_data and not annotations:
+        parts.append(f"\n## Current Question\nAnalyze this {image_modality.upper()} image. {message}")
+    elif image_data and annotations:
+        parts.append(
+            f"\n## Current Question\nAnalyze this {image_modality.upper()} image, "
+            f"focusing on the annotated region(s). {message}"
+        )
+    else:
+        parts.append(f"\n## Current Question\n{message}")
+
+    prompt = "\n".join(parts)
+
+    # Decode image
+    pil_image = None
+    if image_data:
+        try:
+            raw = image_data
+            if "," in raw:
+                raw = raw.split(",", 1)[1]
+            img_bytes = _b64.b64decode(raw)
+            from PIL import Image as PILImage
+            pil_image = PILImage.open(io.BytesIO(img_bytes)).convert("RGB")
+        except Exception as e:
+            logger.warning(f"AI portal — failed to decode image: {e}")
+
+    return prompt, pil_image
+
+
+def _run_pubmed_enrichment(message, patient_context):
+    """Run PubMed enrichment based on message intent. Returns dict or None."""
+    if pubmed_agent is None:
+        return None
+    try:
+        msg_lower = message.lower()
+        ddi_keywords   = {"interaction", "drug interaction", "drug-drug", "combine", "combining"}
+        ebm_keywords   = {"treatment", "guideline", "therapy", "efficacy", "evidence", "management",
+                          "recommend", "first-line", "second-line"}
+        zebra_keywords = {"diagnosis", "diagnose", "rare", "unusual", "zebra", "atypical",
+                          "differential", "rule out", "what could"}
+
+        is_ddi   = any(k in msg_lower for k in ddi_keywords)
+        is_ebm   = any(k in msg_lower for k in ebm_keywords)
+        is_zebra = any(k in msg_lower for k in zebra_keywords)
+
+        if is_ddi and patient_context and isinstance(patient_context, dict):
+            meds = []
+            for m in patient_context.get("medications", []):
+                name = m.get("name", "") if isinstance(m, dict) else str(m)
+                if name:
+                    meds.append(name)
+            if len(meds) >= 2:
+                res = pubmed_agent.ddi_monitor(current_medications=meds, max_results_per_pair=1, date_years_back=3)
+                return {"mode": "ddi_monitor", "summary": res.summary, "ddi_alerts": res.ddi_alerts,
+                        "key_findings": res.key_findings[:4], "citation_list": res.citation_list[:4]}
+        elif is_ebm:
+            res = pubmed_agent.ebm_validator(assessment=message[:300], plan="", max_results=3, date_years_back=2)
+            return {"mode": "ebm_validator", "summary": res.summary, "divergences": res.divergences,
+                    "key_findings": res.key_findings[:4], "citation_list": res.citation_list[:4]}
+        elif is_zebra or (not is_ddi and not is_ebm):
+            symptom_vocab = [
+                "cough", "dyspnea", "shortness of breath", "wheezing", "chest pain",
+                "fever", "fatigue", "weight loss", "nausea", "vomiting", "headache",
+                "dizziness", "palpitations", "edema", "rash", "pain", "syncope",
+                "weakness", "numbness", "tingling", "abdominal pain",
+            ]
+            found_symptoms = [s for s in symptom_vocab if s in msg_lower]
+            if found_symptoms:
+                res = pubmed_agent.case_matcher(common_symptoms=found_symptoms[:3], atypical_markers=found_symptoms[3:], max_results=3)
+                return {"mode": "case_matcher", "summary": res.summary, "rare_diagnoses": res.rare_diagnoses,
+                        "key_findings": res.key_findings[:4], "citation_list": res.citation_list[:4]}
+    except Exception as e:
+        logger.debug("AI portal PubMed enrichment failed (non-fatal): %s", e)
+    return None
+
+
+# ── SSE Streaming endpoint for AI Chat Portal ─────────────────────────────
+
+@app.post("/api/ai-portal/chat/stream")
+async def ai_portal_chat_stream(request: Request):
+    """SSE streaming version of the AI Chat Portal endpoint."""
+    data = await request.json()
+    message: str = data.get("message", "")
+    history: list = data.get("history", [])
+    patient_context = data.get("patient_context")
+    image_data: str | None = data.get("image_data")
+    image_modality: str = data.get("image_modality", "xray")
+    annotations: list = data.get("annotations", [])
+
+    if not message and not image_data:
+        raise HTTPException(status_code=400, detail="message or image_data required")
+
+    load_models_lazy()
+
+    prompt, pil_image = _build_ai_portal_prompt(
+        message, history, patient_context, image_data, image_modality, annotations
+    )
+
+    async def event_stream():
+        full_response = ""
+
+        try:
+            if agent is not None and hasattr(agent, "generate_medgemma_stream"):
+                # ── Streaming path (Gemini true streaming / vLLM simulated) ──
+                # Use a queue to bridge sync generator → async yields
+                chunk_queue = asyncio.Queue()
+                _sentinel = object()
+
+                def _run_stream():
+                    try:
+                        for chunk in agent.generate_medgemma_stream(
+                            prompt=prompt, image=pil_image, temperature=0.4, max_tokens=768,
+                        ):
+                            chunk_queue.put_nowait(chunk)
+                    except Exception as e:
+                        chunk_queue.put_nowait(e)
+                    finally:
+                        chunk_queue.put_nowait(_sentinel)
+
+                loop = asyncio.get_event_loop()
+                loop.run_in_executor(None, _run_stream)
+
+                while True:
+                    item = await chunk_queue.get()
+                    if item is _sentinel:
+                        break
+                    if isinstance(item, Exception):
+                        raise item
+                    full_response += item
+                    yield {"event": "token", "data": json.dumps({"text": item})}
+
+            elif agent is not None and hasattr(agent, "generate_medgemma"):
+                # ── Non-streaming fallback: generate then chunk ──
+                full_response = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: agent.generate_medgemma(
+                        prompt=prompt, image=pil_image, temperature=0.4, max_tokens=768,
+                    )
+                )
+                words = full_response.split(" ")
+                for i in range(0, len(words), 4):
+                    chunk = " ".join(words[i:i + 4])
+                    if i > 0:
+                        chunk = " " + chunk
+                    yield {"event": "token", "data": json.dumps({"text": chunk})}
+                    await asyncio.sleep(0.03)
+
+            elif agent is not None and hasattr(agent, "chat"):
+                # ── Transformers path ──
+                full_response = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: agent.chat(prompt)
+                )
+                words = full_response.split(" ")
+                for i in range(0, len(words), 4):
+                    chunk = " ".join(words[i:i + 4])
+                    if i > 0:
+                        chunk = " " + chunk
+                    yield {"event": "token", "data": json.dumps({"text": chunk})}
+                    await asyncio.sleep(0.03)
+
+            else:
+                # Simulated
+                full_response = (
+                    f"[Simulated — no GPU] Regarding your question: \"{message}\"\n\n"
+                    "In a production environment with MedGemma loaded, I would provide "
+                    "detailed clinical insights based on the patient context and your question."
+                )
+                words = full_response.split(" ")
+                for i in range(0, len(words), 3):
+                    chunk = " ".join(words[i:i + 3])
+                    if i > 0:
+                        chunk = " " + chunk
+                    yield {"event": "token", "data": json.dumps({"text": chunk})}
+                    await asyncio.sleep(0.04)
+
+        except Exception as e:
+            logger.error(f"AI portal streaming failed: {e}")
+            yield {"event": "error", "data": json.dumps({"detail": str(e)})}
+            yield {"event": "done", "data": "{}"}
+            return
+
+        # ── Post-processing: extract structured data ──
+        ai_annotations = extract_ai_annotations(full_response)
+        clinical_meta, cleaned_response = extract_clinical_meta(full_response)
+
+        yield {"event": "response_complete", "data": json.dumps({
+            "full_response": cleaned_response,
+            "ai_annotations": ai_annotations,
+            "clinical_meta": clinical_meta,
+        })}
+
+        # ── PubMed enrichment (runs after main response) ──
+        try:
+            pubmed_context = await asyncio.get_event_loop().run_in_executor(
+                None, _run_pubmed_enrichment, message, patient_context
+            )
+            if pubmed_context:
+                yield {"event": "pubmed", "data": json.dumps(pubmed_context)}
+        except Exception as e:
+            logger.debug(f"Streaming PubMed enrichment failed: {e}")
+
+        yield {"event": "done", "data": "{}"}
+
+    return EventSourceResponse(event_stream())
+
+
+@app.get("/api/ai-portal/token-stats")
+async def ai_portal_token_stats():
+    """Return token usage statistics for the active inference backend."""
+    if agent is None:
+        return {"backend": "simulated", "requests": 0}
+    if hasattr(agent, "get_inference_stats"):
+        stats = agent.get_inference_stats()
+        stats["backend"] = type(agent).__name__
+        return stats
+    return {"backend": type(agent).__name__, "requests": 0, "note": "stats not available for this backend"}
 
 
 @app.post("/api/ai-portal/transcribe")
@@ -2949,6 +3373,42 @@ async def api_rare_disease_hunt(request: Request):
         )
 
     return report.model_dump(mode="json")
+
+
+@app.post("/api/rare-disease/hunt/stream")
+@track_perf("rare_disease_hunt_stream")
+async def api_rare_disease_hunt_stream(request: Request):
+    """SSE streaming rare disease hunt — emits progress events and hypothesis cards as they're scored."""
+    if rare_disease_director is None:
+        raise HTTPException(status_code=503, detail="Rare disease director not initialized")
+    try:
+        payload = await request.json()
+        case = RareCaseInput(**payload)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid request body: {exc}")
+
+    async def event_stream():
+        try:
+            async for event in rare_disease_director.hunt_stream(case):
+                event_name = event["event"]
+                event_data = event["data"]
+                data_str = json.dumps(event_data) if not isinstance(event_data, str) else event_data
+                yield {"event": event_name, "data": data_str}
+        except Exception as exc:
+            logger.exception("Rare disease hunt stream failed")
+            yield {"event": "error", "data": json.dumps({"detail": str(exc)})}
+            yield {"event": "done", "data": "{}"}
+            return
+
+        if audit_logger is not None:
+            audit_logger.log(
+                event_type="clinical_ai",
+                action="rare_disease_hunt_stream",
+                patient_id=None,
+                details={"symptoms_count": len(case.symptoms)},
+            )
+
+    return EventSourceResponse(event_stream())
 
 
 if __name__ == "__main__":

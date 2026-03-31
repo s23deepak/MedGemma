@@ -18,7 +18,17 @@ class MockFHIRServer:
     """
     Mock FHIR R4 server for demo purposes.
     Provides realistic patient data for clinical decision support demos.
-    Includes outpatient (P001–P003) and inpatient (P004–P005) demo patients.
+
+    Outpatient encounters  : P001–P003 (asthma/HTN, DM/CAD/CKD, anxiety/migraine)
+    Inpatient — rounding   : P004–P005 (sepsis/ICU, CHF/cardiology)
+                             P006 (CAP + COPD, Gen Medicine Day 4)
+                             P007 (acute ischemic stroke, Neurology Day 2)
+    Inpatient — shift brief: P008 (perforated peptic ulcer post-op, SICU)
+                             P009 (NSTEMI awaiting cath, CCU)
+    ED / new encounters    : P010 (probable SLE — rare disease / council)
+                             P011 (progressive dyspnea + clubbing — IPF vs. malignancy)
+    Rare disease hunt      : P012 (dermatomyositis — proximal weakness + heliotrope rash)
+                             P013 (McArdle disease — exercise intolerance + myoglobinuria)
     """
 
     def __init__(self, data_path: str | Path | None = None):
@@ -44,6 +54,7 @@ class MockFHIRServer:
         """Initialize with built-in sample patient data."""
         self._init_outpatients()
         self._init_inpatients()
+        self._init_extended_patients()
 
     def _init_outpatients(self):
         """Outpatient demo patients P001–P003."""
@@ -1121,6 +1132,845 @@ class MockFHIRServer:
         memories = self.memories.get(patient_id, [])
         memories.sort(key=lambda m: m.get("timestamp", ""), reverse=True)
         return [m.get("text", "") for m in memories if m.get("text")]
+
+    def _init_extended_patients(self):
+        """Extended demo patients P006–P013: rounding, shift brief, encounters, rare disease."""
+        now = datetime.now()
+
+        # ─────────────────────────────────────────────────────────────────────
+        # ROUNDING PATIENTS (inpatient — ward rounds)
+        # ─────────────────────────────────────────────────────────────────────
+
+        # ── P006: Eleanor Hayes — CAP + COPD exacerbation, Gen Medicine Day 4 ─
+        adm006 = now - timedelta(days=4)
+        self.patients["P006"] = {
+            "resourceType": "Patient", "id": "P006",
+            "name": [{"family": "Hayes", "given": ["Eleanor"]}],
+            "gender": "female", "birthDate": "1952-08-22",
+            "address": [{"city": "Boston", "state": "MA"}],
+            "encounter_type": "inpatient", "hospital_id": "GENERAL",
+            "admission_date": adm006.isoformat(),
+            "ward": "General Medicine", "bed": "MED-15",
+            "code_status": "Full Code", "attending": "Dr. Patricia Wu",
+        }
+        self.conditions["P006"] = [
+            {"resourceType": "Condition", "id": "C060", "subject": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "Community-acquired pneumonia (right lower lobe)"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": adm006.isoformat()},
+            {"resourceType": "Condition", "id": "C061", "subject": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "COPD, GOLD Stage III (severe)"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": "2018-03-10"},
+            {"resourceType": "Condition", "id": "C062", "subject": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "Persistent atrial fibrillation"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": "2021-07-05"},
+            {"resourceType": "Condition", "id": "C063", "subject": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "Osteoporosis"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": "2019-11-20"},
+        ]
+        self.medications["P006"] = [
+            {"resourceType": "MedicationStatement", "id": "M060", "subject": {"reference": "Patient/P006"},
+             "medicationCodeableConcept": {"coding": [{"display": "Ceftriaxone 1g IV every 24h"}]},
+             "status": "active", "dosage": [{"text": "1g IV q24h × 5 days (Day 4 of 5)"}]},
+            {"resourceType": "MedicationStatement", "id": "M061", "subject": {"reference": "Patient/P006"},
+             "medicationCodeableConcept": {"coding": [{"display": "Azithromycin 500mg IV transitioning oral"}]},
+             "status": "active", "dosage": [{"text": "500mg IV QD → PO switch planned today"}]},
+            {"resourceType": "MedicationStatement", "id": "M062", "subject": {"reference": "Patient/P006"},
+             "medicationCodeableConcept": {"coding": [{"display": "Albuterol 2.5mg nebulization"}]},
+             "status": "active", "dosage": [{"text": "2.5mg NEB q4–6h PRN bronchospasm"}]},
+            {"resourceType": "MedicationStatement", "id": "M063", "subject": {"reference": "Patient/P006"},
+             "medicationCodeableConcept": {"coding": [{"display": "Ipratropium 0.5mg nebulization"}]},
+             "status": "active", "dosage": [{"text": "0.5mg NEB q6h"}]},
+            {"resourceType": "MedicationStatement", "id": "M064", "subject": {"reference": "Patient/P006"},
+             "medicationCodeableConcept": {"coding": [{"display": "Prednisone 40mg oral"}]},
+             "status": "active", "dosage": [{"text": "40mg PO QD (COPD exacerbation, Day 4 of 5)"}]},
+            {"resourceType": "MedicationStatement", "id": "M065", "subject": {"reference": "Patient/P006"},
+             "medicationCodeableConcept": {"coding": [{"display": "Apixaban 5mg oral twice daily"}]},
+             "status": "active", "dosage": [{"text": "5mg PO BID (AF anticoagulation)"}]},
+        ]
+        self.allergies["P006"] = [
+            {"resourceType": "AllergyIntolerance", "id": "A060",
+             "patient": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "Clindamycin"}]},
+             "reaction": [{"manifestation": [{"coding": [{"display": "C. difficile colitis (historical)"}]}],
+                           "severity": "moderate"}]},
+        ]
+        self.observations["P006"] = [
+            {"resourceType": "Observation", "id": "O060", "subject": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "SpO2"}]},
+             "valueQuantity": {"value": "92→93→95", "unit": "%"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O061", "subject": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "Respiratory Rate"}]},
+             "valueQuantity": {"value": 18, "unit": "breaths/min"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O062", "subject": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "Temperature"}]},
+             "valueQuantity": {"value": 37.4, "unit": "°C"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O063", "subject": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "Heart Rate (irregular)"}]},
+             "valueQuantity": {"value": 82, "unit": "bpm"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O064", "subject": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "WBC"}]},
+             "valueQuantity": {"value": "16.8→14.2→11.4", "unit": "K/μL"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O065", "subject": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "CRP"}]},
+             "valueQuantity": {"value": 142, "unit": "mg/L"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O066", "subject": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "Sputum Culture"}]},
+             "valueString": "Streptococcus pneumoniae — susceptible to penicillin",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O067", "subject": {"reference": "Patient/P006"},
+             "code": {"coding": [{"display": "CXR"}]},
+             "valueString": "Day 1: RLL consolidation with air bronchograms. Day 4: improving consolidation, no effusion.",
+             "effectiveDateTime": now.isoformat()},
+        ]
+        self.images["P006"] = [
+            {"url": "/static/images/chest_xray_pneumonia.jpg",
+             "modality": "xray",
+             "timestamp": adm006.isoformat(),
+             "analysis": "Right lower lobe consolidation with air bronchograms consistent with bacterial pneumonia. "
+                         "No pleural effusion. Hyperinflation with flattened diaphragms and increased AP diameter "
+                         "consistent with underlying COPD. No pneumothorax."},
+        ]
+        self.active_orders["P006"] = [
+            {"order_id": "ORD-P006-01", "type": "medication", "name": "Ceftriaxone 1g IV q24h",
+             "ordered_at": adm006.isoformat(), "status": "active"},
+            {"order_id": "ORD-P006-02", "type": "medication", "name": "Azithromycin → switch to PO today",
+             "ordered_at": adm006.isoformat(), "status": "active"},
+            {"order_id": "ORD-P006-03", "type": "therapy", "name": "Respiratory therapy NEB + CPT BID",
+             "ordered_at": adm006.isoformat(), "status": "active"},
+            {"order_id": "ORD-P006-04", "type": "monitoring", "name": "O2 titrate SpO2 ≥ 92%",
+             "ordered_at": adm006.isoformat(), "status": "active"},
+            {"order_id": "ORD-P006-05", "type": "lab", "name": "BMP + CBC daily",
+             "ordered_at": adm006.isoformat(), "status": "active"},
+            {"order_id": "ORD-P006-06", "type": "prophylaxis", "name": "Enoxaparin 40mg SQ QD (VTE)",
+             "ordered_at": adm006.isoformat(), "status": "active"},
+            {"order_id": "ORD-P006-07", "type": "consult", "name": "PT/OT mobility assessment",
+             "ordered_at": (adm006 + timedelta(days=2)).isoformat(), "status": "pending"},
+        ]
+        self.progress_notes["P006"] = [
+            {"note_id": "PN-P006-01", "author": "Dr. Patricia Wu", "role": "attending",
+             "created_at": adm006.isoformat(),
+             "note_text": "ADMISSION NOTE\nCC: Productive cough × 5 days, fever to 38.9°C, increased dyspnea.\n"
+                          "HPI: 72F with COPD GOLD III and AF presenting with 5-day worsening productive cough "
+                          "(yellow-green sputum), subjective fever, and progressive dyspnea on exertion now at rest.\n"
+                          "A/P: CAP superimposed on COPD exacerbation. Starting ceftriaxone + azithromycin per CAP guidelines. "
+                          "Bronchodilators, prednisone 40mg × 5 days. Continue apixaban for AF. Monitor O2 saturation."},
+            {"note_id": "PN-P006-02", "author": "Dr. James Lee", "role": "resident",
+             "created_at": (adm006 + timedelta(days=2)).isoformat(),
+             "note_text": "DAY 2 PROGRESS NOTE\nS: Patient reports improved dyspnea, still productive cough. Afebrile overnight.\n"
+                          "O: T 37.6, HR 80 (AF), RR 20, SpO2 93% on 2L NC. Lungs: decreased crackles RLL.\n"
+                          "Labs: WBC 14.2 (↓ from 16.8). CXR: slight improvement in consolidation.\n"
+                          "A: CAP improving on antibiotics. COPD exacerbation improving with bronchodilators + steroids.\n"
+                          "P: Continue current regimen. Reassess O2 requirements. Encourage ambulation."},
+            {"note_id": "PN-P006-03", "author": "Dr. Patricia Wu", "role": "attending",
+             "created_at": (now - timedelta(hours=6)).isoformat(),
+             "note_text": "DAY 4 AM ROUNDS\nS: Feels much better, appetite returning. Requesting to go home.\n"
+                          "O: T 37.4 (afebrile × 48h), HR 82 (AF-controlled), RR 18, SpO2 95% on 1L NC (was 2L).\n"
+                          "WBC 11.4 (trending down). Sputum: S. pneumoniae susceptible.\n"
+                          "A/P: CAP resolving — completing Day 5 antibiotics tomorrow. COPD improving. "
+                          "Plan: Switch azithromycin to PO today. Discharge planning: complete antibiotic course at home (oral), "
+                          "arrange COPD follow-up in 1 week, outpatient pulmonology in 4 weeks. Ensure influenza + pneumococcal vaccines given before discharge."},
+        ]
+
+        # ── P007: Derrick Yates — Acute ischemic stroke, Neurology Day 2 ─────
+        adm007 = now - timedelta(hours=42)
+        self.patients["P007"] = {
+            "resourceType": "Patient", "id": "P007",
+            "name": [{"family": "Yates", "given": ["Derrick"]}],
+            "gender": "male", "birthDate": "1963-02-14",
+            "address": [{"city": "Philadelphia", "state": "PA"}],
+            "encounter_type": "inpatient", "hospital_id": "ACADEMIC",
+            "admission_date": adm007.isoformat(),
+            "ward": "Neurology", "bed": "NEURO-03",
+            "code_status": "Full Code", "attending": "Dr. Richard Huang",
+        }
+        self.conditions["P007"] = [
+            {"resourceType": "Condition", "id": "C070", "subject": {"reference": "Patient/P007"},
+             "code": {"coding": [{"display": "Acute ischemic stroke — left MCA territory (NIHSS 4)"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": adm007.isoformat()},
+            {"resourceType": "Condition", "id": "C071", "subject": {"reference": "Patient/P007"},
+             "code": {"coding": [{"display": "Atrial fibrillation — newly diagnosed"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": adm007.isoformat()},
+            {"resourceType": "Condition", "id": "C072", "subject": {"reference": "Patient/P007"},
+             "code": {"coding": [{"display": "Hypertension"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": "2015-06-12"},
+            {"resourceType": "Condition", "id": "C073", "subject": {"reference": "Patient/P007"},
+             "code": {"coding": [{"display": "Hyperlipidemia"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": "2017-09-30"},
+        ]
+        self.medications["P007"] = [
+            {"resourceType": "MedicationStatement", "id": "M070", "subject": {"reference": "Patient/P007"},
+             "medicationCodeableConcept": {"coding": [{"display": "Aspirin 325mg oral (post-tPA 24h → 81mg QD)"}]},
+             "status": "active", "dosage": [{"text": "325mg PO QD Loading day 1, then 81mg QD"}]},
+            {"resourceType": "MedicationStatement", "id": "M071", "subject": {"reference": "Patient/P007"},
+             "medicationCodeableConcept": {"coding": [{"display": "Atorvastatin 80mg oral nightly"}]},
+             "status": "active", "dosage": [{"text": "80mg PO QHS (high-intensity statin)"}]},
+            {"resourceType": "MedicationStatement", "id": "M072", "subject": {"reference": "Patient/P007"},
+             "medicationCodeableConcept": {"coding": [{"display": "Lisinopril 5mg oral — HELD (BP management)"}]},
+             "status": "on-hold", "dosage": [{"text": "5mg PO QD — held, target BP <180/105 first 24h post-tPA"}]},
+            {"resourceType": "MedicationStatement", "id": "M073", "subject": {"reference": "Patient/P007"},
+             "medicationCodeableConcept": {"coding": [{"display": "Enoxaparin 40mg SQ — VTE prophylaxis"}]},
+             "status": "active", "dosage": [{"text": "40mg SQ QD (start 24h post-tPA)"}]},
+        ]
+        self.allergies["P007"] = [
+            {"resourceType": "AllergyIntolerance", "id": "A070",
+             "patient": {"reference": "Patient/P007"},
+             "code": {"coding": [{"display": "No known drug allergies"}]},
+             "reaction": [{"manifestation": [{"coding": [{"display": "NKDA"}]}]}]},
+        ]
+        self.observations["P007"] = [
+            {"resourceType": "Observation", "id": "O070", "subject": {"reference": "Patient/P007"},
+             "code": {"coding": [{"display": "Blood Pressure"}]},
+             "valueQuantity": {"value": "178/96→162/88→154/82", "unit": "mmHg"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O071", "subject": {"reference": "Patient/P007"},
+             "code": {"coding": [{"display": "NIHSS Score"}]},
+             "valueQuantity": {"value": "6→4 (mild, improving)", "unit": "points"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O072", "subject": {"reference": "Patient/P007"},
+             "code": {"coding": [{"display": "MRI Brain — DWI/ADC"}]},
+             "valueString": "Acute infarction in left MCA territory (insular cortex + inferior frontal gyrus). "
+                            "No hemorrhagic transformation. No midline shift.",
+             "effectiveDateTime": adm007.isoformat()},
+            {"resourceType": "Observation", "id": "O073", "subject": {"reference": "Patient/P007"},
+             "code": {"coding": [{"display": "Cardiac Monitor — Rhythm"}]},
+             "valueString": "Paroxysmal atrial fibrillation confirmed. Ventricular rate 78 bpm.",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O074", "subject": {"reference": "Patient/P007"},
+             "code": {"coding": [{"display": "Echocardiogram — TEE"}]},
+             "valueString": "EF 60%. No left atrial thrombus. LAE present. No significant valvular disease.",
+             "effectiveDateTime": (adm007 + timedelta(hours=18)).isoformat()},
+            {"resourceType": "Observation", "id": "O075", "subject": {"reference": "Patient/P007"},
+             "code": {"coding": [{"display": "LDL Cholesterol"}]},
+             "valueQuantity": {"value": 182, "unit": "mg/dL"},
+             "effectiveDateTime": adm007.isoformat()},
+            {"resourceType": "Observation", "id": "O076", "subject": {"reference": "Patient/P007"},
+             "code": {"coding": [{"display": "Neuro Exam"}]},
+             "valueString": "Right facial droop (mild). Right arm drift grade 4/5. Mild dysarthria. "
+                            "Comprehension intact. No neglect.",
+             "effectiveDateTime": now.isoformat()},
+        ]
+        self.active_orders["P007"] = [
+            {"order_id": "ORD-P007-01", "type": "monitoring", "name": "Continuous cardiac telemetry + neuro checks q4h",
+             "ordered_at": adm007.isoformat(), "status": "active"},
+            {"order_id": "ORD-P007-02", "type": "consult", "name": "PT / OT / SLP consults",
+             "ordered_at": adm007.isoformat(), "status": "active"},
+            {"order_id": "ORD-P007-03", "type": "imaging", "name": "MRI brain + MRA (repeat Day 4)",
+             "ordered_at": adm007.isoformat(), "status": "pending"},
+            {"order_id": "ORD-P007-04", "type": "lab", "name": "Hypercoagulable panel (anticardiolipin, lupus AC)",
+             "ordered_at": (adm007 + timedelta(hours=12)).isoformat(), "status": "pending"},
+            {"order_id": "ORD-P007-05", "type": "medication", "name": "Apixaban 5mg BID — START in 2 weeks (AF anticoagulation)",
+             "ordered_at": adm007.isoformat(), "status": "pending"},
+        ]
+        self.progress_notes["P007"] = [
+            {"note_id": "PN-P007-01", "author": "Dr. Richard Huang", "role": "attending",
+             "created_at": adm007.isoformat(),
+             "note_text": "NEUROLOGY ADMIT NOTE\n61M presents with acute-onset right-sided facial droop and arm weakness "
+                          "noted 90 min prior to arrival. Last known well 2.5h before ED arrival. NIHSS 6 on arrival.\n"
+                          "IV tPA administered (0.9mg/kg) at 08:42 without complication. Patient transferred to "
+                          "neurology stroke unit. No hemorrhage on NCCT. MRI confirms L MCA territory infarct.\n"
+                          "ETIOLOGY: Likely cardioembolic — new AF identified on telemetry. No carotid stenosis >50% on CTA.\n"
+                          "PLAN: ASA 325mg × 24h then 81mg. High-intensity statin. Hold lisinopril × 24h. "
+                          "Anticoagulate for AF in 2–4 weeks (haemorrhagic transformation risk). PT/OT/SLP consults."},
+            {"note_id": "PN-P007-02", "author": "Dr. Amy Chen", "role": "resident",
+             "created_at": (adm007 + timedelta(hours=20)).isoformat(),
+             "note_text": "DAY 1 PROGRESS NOTE\nS: Patient more alert, reports right hand 'clumsy', mild slurred speech. No headache.\n"
+                          "O: BP 162/88, HR 78 (AF). NIHSS 5. Right facial droop improving, arm drift 4+/5. "
+                          "Gait: not yet tested (OT evaluating AM).\n"
+                          "A/P: Post-tPA stroke Day 1 — neurologically stable, mild improvement. "
+                          "No hemorrhagic transformation on AM CT. VTE prophylaxis started (24h post-tPA). "
+                          "Dysphagia screen: minimal aspiration risk per SLP — soft diet initiated."},
+            {"note_id": "PN-P007-03", "author": "Dr. Richard Huang", "role": "attending",
+             "created_at": (now - timedelta(hours=4)).isoformat(),
+             "note_text": "DAY 2 ROUNDS — STROKE TEAM\nNIHSS 4 (improving × 2 days). BP 154/82 — allowing permissive "
+                          "hypertension for now (target <180/105 until Day 7). AF confirmed — discuss anticoagulation "
+                          "timing with patient: plan apixaban at 2 weeks IF no hemorrhagic transformation. "
+                          "TEE: no LAA thrombus. SLP: tolerating pureed diet. Repeat MRI Day 4 for infarct evolution. "
+                          "Rehab candidacy: recommend inpatient rehabilitation facility given deficits."},
+        ]
+
+        # ─────────────────────────────────────────────────────────────────────
+        # SHIFT BRIEF PATIENTS (ICU / critical care handover)
+        # ─────────────────────────────────────────────────────────────────────
+
+        # ── P008: Nalini Krishnan — Perforated peptic ulcer, post-op 10h, SICU ─
+        adm008 = now - timedelta(hours=10)
+        self.patients["P008"] = {
+            "resourceType": "Patient", "id": "P008",
+            "name": [{"family": "Krishnan", "given": ["Nalini"]}],
+            "gender": "female", "birthDate": "1990-05-30",
+            "address": [{"city": "Houston", "state": "TX"}],
+            "encounter_type": "inpatient", "hospital_id": "ACADEMIC",
+            "admission_date": adm008.isoformat(),
+            "ward": "Surgical ICU", "bed": "SICU-02",
+            "code_status": "Full Code", "attending": "Dr. James Fortier",
+        }
+        self.conditions["P008"] = [
+            {"resourceType": "Condition", "id": "C080", "subject": {"reference": "Patient/P008"},
+             "code": {"coding": [{"display": "Perforated peptic ulcer (H. pylori confirmed) — post emergency laparotomy + Graham patch"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (adm008 - timedelta(hours=3)).isoformat()},
+            {"resourceType": "Condition", "id": "C081", "subject": {"reference": "Patient/P008"},
+             "code": {"coding": [{"display": "Septic shock — abdominal source"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": adm008.isoformat()},
+            {"resourceType": "Condition", "id": "C082", "subject": {"reference": "Patient/P008"},
+             "code": {"coding": [{"display": "Acute hypoxic respiratory failure — intubated on ventilator"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (adm008 - timedelta(hours=1)).isoformat()},
+        ]
+        self.medications["P008"] = [
+            {"resourceType": "MedicationStatement", "id": "M080", "subject": {"reference": "Patient/P008"},
+             "medicationCodeableConcept": {"coding": [{"display": "Piperacillin-tazobactam 3.375g IV q6h"}]},
+             "status": "active", "dosage": [{"text": "3.375g IV q6h (septic shock dose)"}]},
+            {"resourceType": "MedicationStatement", "id": "M081", "subject": {"reference": "Patient/P008"},
+             "medicationCodeableConcept": {"coding": [{"display": "Metronidazole 500mg IV q8h"}]},
+             "status": "active", "dosage": [{"text": "500mg IV q8h (anaerobic coverage)"}]},
+            {"resourceType": "MedicationStatement", "id": "M082", "subject": {"reference": "Patient/P008"},
+             "medicationCodeableConcept": {"coding": [{"display": "Norepinephrine infusion 0.12 mcg/kg/min"}]},
+             "status": "active", "dosage": [{"text": "Titrate MAP ≥ 65 mmHg"}]},
+            {"resourceType": "MedicationStatement", "id": "M083", "subject": {"reference": "Patient/P008"},
+             "medicationCodeableConcept": {"coding": [{"display": "Propofol 20 mcg/kg/min + Fentanyl 25 mcg/h"}]},
+             "status": "active", "dosage": [{"text": "Sedation/analgesia — RASS target -2"}]},
+            {"resourceType": "MedicationStatement", "id": "M084", "subject": {"reference": "Patient/P008"},
+             "medicationCodeableConcept": {"coding": [{"display": "Pantoprazole 40mg IV BID"}]},
+             "status": "active", "dosage": [{"text": "40mg IV BID (stress ulcer prophylaxis + PUD treatment)"}]},
+        ]
+        self.allergies["P008"] = [
+            {"resourceType": "AllergyIntolerance", "id": "A080",
+             "patient": {"reference": "Patient/P008"},
+             "code": {"coding": [{"display": "Ibuprofen / NSAIDs"}]},
+             "reaction": [{"manifestation": [{"coding": [{"display": "GI bleed — RELEVANT to admission"}]}],
+                           "severity": "severe"}]},
+        ]
+        self.observations["P008"] = [
+            {"resourceType": "Observation", "id": "O080", "subject": {"reference": "Patient/P008"},
+             "code": {"coding": [{"display": "Blood Pressure / MAP"}]},
+             "valueQuantity": {"value": "88/54 MAP 66 (on vasopressors)", "unit": "mmHg"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O081", "subject": {"reference": "Patient/P008"},
+             "code": {"coding": [{"display": "Heart Rate"}]},
+             "valueQuantity": {"value": 112, "unit": "bpm"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O082", "subject": {"reference": "Patient/P008"},
+             "code": {"coding": [{"display": "Temperature"}]},
+             "valueQuantity": {"value": 38.7, "unit": "°C"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O083", "subject": {"reference": "Patient/P008"},
+             "code": {"coding": [{"display": "Ventilator Settings"}]},
+             "valueString": "AC/VC: TV 420mL (6mL/kg IBW), RR 18, FiO2 0.50, PEEP 8. Ppeak 28, Pplat 22.",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O084", "subject": {"reference": "Patient/P008"},
+             "code": {"coding": [{"display": "Lactate trend"}]},
+             "valueQuantity": {"value": "4.1→2.8 (clearing)", "unit": "mmol/L"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O085", "subject": {"reference": "Patient/P008"},
+             "code": {"coding": [{"display": "Urine Output"}]},
+             "valueQuantity": {"value": 28, "unit": "mL/hr"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O086", "subject": {"reference": "Patient/P008"},
+             "code": {"coding": [{"display": "Hemoglobin / Hematocrit"}]},
+             "valueQuantity": {"value": "8.4 / 26%", "unit": "g/dL / %"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O087", "subject": {"reference": "Patient/P008"},
+             "code": {"coding": [{"display": "Creatinine"}]},
+             "valueQuantity": {"value": 1.8, "unit": "mg/dL"},
+             "effectiveDateTime": now.isoformat()},
+        ]
+        self.images["P008"] = [
+            {"url": "/static/images/mock_chest_xray.jpg",
+             "modality": "xray",
+             "timestamp": (adm008 - timedelta(hours=8)).isoformat(),
+             "analysis": "Post-intubation CXR. ETT tip at 3cm above carina — well-positioned. "
+                         "Bilateral lung fields clear. NG tube in stomach. No pneumothorax. "
+                         "Mild cardiomegaly. No free air under diaphragm visible (operative site)."},
+        ]
+        self.active_orders["P008"] = [
+            {"order_id": "ORD-P008-01", "type": "ventilator", "name": "AC/VC: TV 420, RR 18, FiO2 0.50, PEEP 8 — wean as tolerated",
+             "ordered_at": adm008.isoformat(), "status": "active"},
+            {"order_id": "ORD-P008-02", "type": "medication", "name": "Norepinephrine — titrate MAP ≥65, wean when able",
+             "ordered_at": adm008.isoformat(), "status": "active"},
+            {"order_id": "ORD-P008-03", "type": "device", "name": "Arterial line (R radial), CVC (R IJ), Foley catheter",
+             "ordered_at": adm008.isoformat(), "inserted_at": adm008.isoformat(), "status": "active"},
+            {"order_id": "ORD-P008-04", "type": "lab", "name": "ABG q4h, BMP + lactate q6h, CBC q12h",
+             "ordered_at": adm008.isoformat(), "status": "active"},
+            {"order_id": "ORD-P008-05", "type": "monitoring", "name": "Continuous hemodynamic monitoring, RASS q1h",
+             "ordered_at": adm008.isoformat(), "status": "active"},
+            {"order_id": "ORD-P008-06", "type": "prophylaxis", "name": "Heparin 5000u SQ BID (VTE — wound not a contraindication)",
+             "ordered_at": adm008.isoformat(), "status": "active"},
+        ]
+        self.progress_notes["P008"] = [
+            {"note_id": "PN-P008-01", "author": "Dr. James Fortier", "role": "attending",
+             "created_at": adm008.isoformat(),
+             "note_text": "OPERATIVE/ICU ADMISSION NOTE — SHIFT BRIEF (SBAR)\n"
+                          "SITUATION: 34F post emergency Graham patch repair of perforated duodenal ulcer. Arrived SICU 10h ago. "
+                          "Currently intubated/ventilated, on vasopressors.\n"
+                          "BACKGROUND: NSAID allergy (GI bleed history). H. pylori confirmed on rapid urease test intraop. "
+                          "Presented with acute abdomen, free air on CXR, BP 88/54 at triage. Taken emergently to OR.\n"
+                          "ASSESSMENT: Septic shock improving — lactate clearing 4.1→2.8. MAP 66 on NE 0.12. "
+                          "Ventilator: AC/VC, lung-protective, FiO2 weaning. Hgb 8.4 — transfusion threshold 7.0 (no active bleed).\n"
+                          "PLAN/HANDOFF: Goal MAP ≥65 — wean vasopressors if stable. Wean FiO2 target SpO2 ≥94%. "
+                          "UO 28mL/hr — cautious fluids (avoid overresuscitation). Serial lactates q6h. "
+                          "CONCERNS: Possible NSAID-induced ulcer (ALLERGY — NO NSAIDs). If desaturates — suspect ARDS. "
+                          "If pressors escalating — re-examine abdomen for anastomotic leak."},
+            {"note_id": "PN-P008-02", "author": "RN Amanda Torres", "role": "nurse",
+             "created_at": (now - timedelta(hours=2)).isoformat(),
+             "note_text": "NURSING SHIFT BRIEF (Incoming Night Team)\n"
+                          "Patient: Nalini K, SICU-02 — post-op 10h ruptured PUD + septic shock\n"
+                          "Lines: A-line R radial (good waveform), R IJ CVC (3 lumens), Foley\n"
+                          "Current drips: NE 0.12 mcg/kg/min, Propofol 20 mcg/kg/min, Fentanyl 25 mcg/h\n"
+                          "Vent: AC/VC, TV 420, RR 18, PEEP 8, FiO2 50% — SpO2 97%\n"
+                          "I/O last 8h: IN 2,200mL / OUT 320mL urine (Foley) + 180mL surgical drain\n"
+                          "RASS: -2 (appropriate). Family notified and at bedside.\n"
+                          "ISSUES TO WATCH: UO marginal (28mL/hr) — notify MD if <20mL/hr × 2h. "
+                          "NE titrating — last increase 1h ago for MAP 62. Next lactate due in 4h."},
+        ]
+
+        # ── P009: Brett Callahan — NSTEMI, CCU, awaiting cath ────────────────
+        adm009 = now - timedelta(hours=18)
+        self.patients["P009"] = {
+            "resourceType": "Patient", "id": "P009",
+            "name": [{"family": "Callahan", "given": ["Brett"]}],
+            "gender": "male", "birthDate": "1969-11-03",
+            "address": [{"city": "Phoenix", "state": "AZ"}],
+            "encounter_type": "inpatient", "hospital_id": "COMMUNITY",
+            "admission_date": adm009.isoformat(),
+            "ward": "Coronary Care Unit", "bed": "CCU-05",
+            "code_status": "Full Code", "attending": "Dr. Karen Patel",
+        }
+        self.conditions["P009"] = [
+            {"resourceType": "Condition", "id": "C090", "subject": {"reference": "Patient/P009"},
+             "code": {"coding": [{"display": "NSTEMI — lateral ST depression + troponin elevation"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": adm009.isoformat()},
+            {"resourceType": "Condition", "id": "C091", "subject": {"reference": "Patient/P009"},
+             "code": {"coding": [{"display": "Hypertension"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": "2014-04-20"},
+            {"resourceType": "Condition", "id": "C092", "subject": {"reference": "Patient/P009"},
+             "code": {"coding": [{"display": "Dyslipidemia"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": "2016-08-15"},
+            {"resourceType": "Condition", "id": "C093", "subject": {"reference": "Patient/P009"},
+             "code": {"coding": [{"display": "Active tobacco use — 1 PPD × 30 years"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": "1993-01-01"},
+        ]
+        self.medications["P009"] = [
+            {"resourceType": "MedicationStatement", "id": "M090", "subject": {"reference": "Patient/P009"},
+             "medicationCodeableConcept": {"coding": [{"display": "Aspirin 325mg load → 81mg QD"}]},
+             "status": "active", "dosage": [{"text": "Loading 325mg, then 81mg QD indefinitely"}]},
+            {"resourceType": "MedicationStatement", "id": "M091", "subject": {"reference": "Patient/P009"},
+             "medicationCodeableConcept": {"coding": [{"display": "Ticagrelor 180mg loading → 90mg BID"}]},
+             "status": "active", "dosage": [{"text": "DAPT — loading dose given, maintenance 90mg BID"}]},
+            {"resourceType": "MedicationStatement", "id": "M092", "subject": {"reference": "Patient/P009"},
+             "medicationCodeableConcept": {"coding": [{"display": "Heparin infusion weight-based protocol"}]},
+             "status": "active", "dosage": [{"text": "Continuous IV heparin — target aPTT 60–100s"}]},
+            {"resourceType": "MedicationStatement", "id": "M093", "subject": {"reference": "Patient/P009"},
+             "medicationCodeableConcept": {"coding": [{"display": "Atorvastatin 80mg oral nightly"}]},
+             "status": "active", "dosage": [{"text": "80mg PO QHS (high-intensity)"}]},
+            {"resourceType": "MedicationStatement", "id": "M094", "subject": {"reference": "Patient/P009"},
+             "medicationCodeableConcept": {"coding": [{"display": "Metoprolol succinate 25mg BID"}]},
+             "status": "active", "dosage": [{"text": "25mg PO BID (target HR <70, BP <130/80)"}]},
+        ]
+        self.allergies["P009"] = [
+            {"resourceType": "AllergyIntolerance", "id": "A090",
+             "patient": {"reference": "Patient/P009"},
+             "code": {"coding": [{"display": "Clopidogrel"}]},
+             "reaction": [{"manifestation": [{"coding": [{"display": "Excessive bruising — mild"}]}],
+                           "severity": "mild"}]},
+        ]
+        self.observations["P009"] = [
+            {"resourceType": "Observation", "id": "O090", "subject": {"reference": "Patient/P009"},
+             "code": {"coding": [{"display": "Blood Pressure"}]},
+             "valueQuantity": {"value": 138, "unit": "mmHg systolic"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O091", "subject": {"reference": "Patient/P009"},
+             "code": {"coding": [{"display": "Heart Rate"}]},
+             "valueQuantity": {"value": 72, "unit": "bpm"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O092", "subject": {"reference": "Patient/P009"},
+             "code": {"coding": [{"display": "Troponin I trend"}]},
+             "valueQuantity": {"value": "4.2→8.7→12.1 (trending up)", "unit": "ng/mL"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O093", "subject": {"reference": "Patient/P009"},
+             "code": {"coding": [{"display": "ECG"}]},
+             "valueString": "Sinus rhythm. ST depression 1–2mm leads V4–V6, I, aVL. Lateral T-wave inversions. "
+                            "No STEMI criteria. No Q waves.",
+             "effectiveDateTime": adm009.isoformat()},
+            {"resourceType": "Observation", "id": "O094", "subject": {"reference": "Patient/P009"},
+             "code": {"coding": [{"display": "Echocardiogram (bedside)"}]},
+             "valueString": "EF 45% (mildly reduced). Anteroseptal wall hypokinesis. No pericardial effusion.",
+             "effectiveDateTime": (adm009 + timedelta(hours=4)).isoformat()},
+            {"resourceType": "Observation", "id": "O095", "subject": {"reference": "Patient/P009"},
+             "code": {"coding": [{"display": "LDL / Total Cholesterol"}]},
+             "valueQuantity": {"value": "LDL 198 / Total 272", "unit": "mg/dL"},
+             "effectiveDateTime": adm009.isoformat()},
+        ]
+        self.active_orders["P009"] = [
+            {"order_id": "ORD-P009-01", "type": "procedure", "name": "Cardiac catheterization — SCHEDULED 07:30 TOMORROW (AM list #2)",
+             "ordered_at": adm009.isoformat(), "status": "pending"},
+            {"order_id": "ORD-P009-02", "type": "monitoring", "name": "Continuous telemetry, serial ECG q6h, troponin q6h",
+             "ordered_at": adm009.isoformat(), "status": "active"},
+            {"order_id": "ORD-P009-03", "type": "medication", "name": "Heparin IV infusion — check aPTT in 6h",
+             "ordered_at": adm009.isoformat(), "status": "active"},
+            {"order_id": "ORD-P009-04", "type": "diet", "name": "NPO after midnight (pre-cath)",
+             "ordered_at": (now - timedelta(hours=1)).isoformat(), "status": "active"},
+            {"order_id": "ORD-P009-05", "type": "prophylaxis", "name": "Enoxaparin 40mg SQ QD (VTE — holding after midnight for cath)",
+             "ordered_at": adm009.isoformat(), "status": "active"},
+        ]
+        self.progress_notes["P009"] = [
+            {"note_id": "PN-P009-01", "author": "Dr. Karen Patel", "role": "attending",
+             "created_at": adm009.isoformat(),
+             "note_text": "CARDIOLOGY ADMIT H&P\n55M presenting with 3h chest pressure radiating to left arm, diaphoresis. "
+                          "1 PPD smoker × 30y. Father deceased MI age 52. BP 158/92 on presentation.\n"
+                          "ECG: lateral ST depression + T-wave inversions V4-V6, I, aVL. Troponin I 4.2 rising.\n"
+                          "Dx: NSTEMI — lateral wall ischemia. HEART score 8 (HIGH RISK).\n"
+                          "Plan: Admit CCU. DAPT (aspirin + ticagrelor — NOT clopidogrel per allergy). "
+                          "Heparin drip. High-intensity statin. Beta-blocker. Cardiology cath in <24h. "
+                          "Echo bedside ordered."},
+            {"note_id": "PN-P009-02", "author": "Dr. David Park", "role": "fellow",
+             "created_at": (now - timedelta(hours=3)).isoformat(),
+             "note_text": "SHIFT BRIEF — CCU HANDOFF (OUTGOING DAYS → INCOMING NIGHTS)\n"
+                          "SITUATION: Brett C, 55M, NSTEMI — cath scheduled 07:30 TOMORROW.\n"
+                          "BACKGROUND: DAPT + heparin on board. Echo: EF 45%, anteroseptal hypokinesis. Troponin still rising (12.1).\n"
+                          "ASSESSMENT: Hemodynamically stable. HR 72, BP 138/84. On 2L NC SpO2 99%. No recurrent chest pain × 6h.\n"
+                          "PLAN: NPO after midnight. Continue heparin (check aPTT at 00:00). Repeat ECG + troponin at 01:00.\n"
+                          "CONCERNS: If develops recurrent CP, ST changes, or hemodynamic instability → CALL CATH LAB for emergency PCI. "
+                          "Watch: heparin supratherapeutic (last aPTT 112 — reduced infusion by 10%). "
+                          "Note: CLOPIDOGREL IS CONTRAINDICATED (allergy) — patient on ticagrelor."},
+        ]
+
+        # ─────────────────────────────────────────────────────────────────────
+        # ENCOUNTER PATIENTS (outpatient / ED / new referral)
+        # ─────────────────────────────────────────────────────────────────────
+
+        # ── P010: Sofia Reyes — Probable SLE, ED encounter (Rare Disease / Council) ─
+        self.patients["P010"] = {
+            "resourceType": "Patient", "id": "P010",
+            "name": [{"family": "Reyes", "given": ["Sofia"]}],
+            "gender": "female", "birthDate": "1998-04-12",
+            "address": [{"city": "San Antonio", "state": "TX"}],
+            "encounter_type": "outpatient", "hospital_id": "ACADEMIC",
+        }
+        self.conditions["P010"] = [
+            {"resourceType": "Condition", "id": "C100", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "Polyarthritis — bilateral hands, wrists, knees × 3 months (morning stiffness >1h)"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=90)).isoformat()},
+            {"resourceType": "Condition", "id": "C101", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "Malar rash (butterfly distribution, spares nasolabial folds) × 6 weeks"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=42)).isoformat()},
+            {"resourceType": "Condition", "id": "C102", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "Pleuritis — pleuritic chest pain, positional × 2 weeks"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=14)).isoformat()},
+            {"resourceType": "Condition", "id": "C103", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "Oral ulcers — painless, buccal mucosa × recurrent"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=60)).isoformat()},
+            {"resourceType": "Condition", "id": "C104", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "Photosensitivity — worsening rash with sun exposure"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=60)).isoformat()},
+            {"resourceType": "Condition", "id": "C105", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "Fatigue — severe, limiting daily activities"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=90)).isoformat()},
+        ]
+        self.medications["P010"] = [
+            {"resourceType": "MedicationStatement", "id": "M100", "subject": {"reference": "Patient/P010"},
+             "medicationCodeableConcept": {"coding": [{"display": "Ibuprofen 400mg PRN — minimal relief"}]},
+             "status": "active", "dosage": [{"text": "400mg PO PRN q6h (self-prescribed, minimal benefit)"}]},
+            {"resourceType": "MedicationStatement", "id": "M101", "subject": {"reference": "Patient/P010"},
+             "medicationCodeableConcept": {"coding": [{"display": "Oral contraceptive pill"}]},
+             "status": "active", "dosage": [{"text": "Daily"}]},
+        ]
+        self.allergies["P010"] = [
+            {"resourceType": "AllergyIntolerance", "id": "A100",
+             "patient": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "No known drug allergies"}]},
+             "reaction": [{"manifestation": [{"coding": [{"display": "NKDA"}]}]}]},
+        ]
+        self.observations["P010"] = [
+            {"resourceType": "Observation", "id": "O100", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "Physical Exam — Skin"}]},
+             "valueString": "Erythematous malar rash in butterfly distribution, sparing nasolabial folds. "
+                            "Painless ulcer (5mm) on right buccal mucosa. No discoid lesions. No alopecia.",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O101", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "Physical Exam — Joints"}]},
+             "valueString": "Bilateral synovitis: MCP and PIP joints (2nd, 3rd bilateral), wrists. "
+                            "No joint deformity. Knee effusion bilateral (small). "
+                            "No Jaccoud arthropathy.",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O102", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "ANA (Antinuclear Antibody)"}]},
+             "valueString": "1:640 titer — HIGH POSITIVE (speckled pattern)",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O103", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "Anti-dsDNA"}]},
+             "valueString": "Positive — 285 IU/mL (normal <10)",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O104", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "Complement levels"}]},
+             "valueString": "C3: 62 mg/dL (↓, normal 90–180). C4: 8 mg/dL (↓↓, normal 16–47). Consistent with complement consumption.",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O105", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "CBC"}]},
+             "valueString": "WBC 3.2 K/μL (leukopenia). Hgb 10.8 g/dL (mild anemia). Plt 118 K/μL (thrombocytopenia).",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O106", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "Urinalysis"}]},
+             "valueString": "Protein 2+ (trace proteinuria ~0.6g/24h). RBC 4/HPF. "
+                            "Granular casts — possible nephritis.",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O107", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "ESR / CRP"}]},
+             "valueQuantity": {"value": "ESR 78 / CRP 42", "unit": "mm/hr / mg/L"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O108", "subject": {"reference": "Patient/P010"},
+             "code": {"coding": [{"display": "Family History"}]},
+             "valueString": "Mother: Rheumatoid arthritis. Maternal aunt: hypothyroidism. "
+                            "No family history of SLE.",
+             "effectiveDateTime": now.isoformat()},
+        ]
+
+        # ── P011: Frank Donahue — Progressive dyspnea + clubbing (IPF/ILD, Council) ─
+        self.patients["P011"] = {
+            "resourceType": "Patient", "id": "P011",
+            "name": [{"family": "Donahue", "given": ["Frank"]}],
+            "gender": "male", "birthDate": "1957-07-28",
+            "address": [{"city": "Portland", "state": "OR"}],
+            "encounter_type": "outpatient", "hospital_id": "PULMONOLOGY",
+        }
+        self.conditions["P011"] = [
+            {"resourceType": "Condition", "id": "C110", "subject": {"reference": "Patient/P011"},
+             "code": {"coding": [{"display": "Progressive exertional dyspnea × 8 months (MRC Grade 3–4)"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=240)).isoformat()},
+            {"resourceType": "Condition", "id": "C111", "subject": {"reference": "Patient/P011"},
+             "code": {"coding": [{"display": "Unintentional weight loss — 15 lbs over 6 months"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=180)).isoformat()},
+            {"resourceType": "Condition", "id": "C112", "subject": {"reference": "Patient/P011"},
+             "code": {"coding": [{"display": "Digital clubbing — bilateral fingernails"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=120)).isoformat()},
+            {"resourceType": "Condition", "id": "C113", "subject": {"reference": "Patient/P011"},
+             "code": {"coding": [{"display": "Dry cough — non-productive × 6 months"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=180)).isoformat()},
+        ]
+        self.medications["P011"] = [
+            {"resourceType": "MedicationStatement", "id": "M110", "subject": {"reference": "Patient/P011"},
+             "medicationCodeableConcept": {"coding": [{"display": "No current medications"}]},
+             "status": "active", "dosage": [{"text": "None — first time seeking care for these symptoms"}]},
+        ]
+        self.allergies["P011"] = [
+            {"resourceType": "AllergyIntolerance", "id": "A110",
+             "patient": {"reference": "Patient/P011"},
+             "code": {"coding": [{"display": "Penicillin"}]},
+             "reaction": [{"manifestation": [{"coding": [{"display": "Rash"}]}],
+                           "severity": "mild"}]},
+        ]
+        self.observations["P011"] = [
+            {"resourceType": "Observation", "id": "O110", "subject": {"reference": "Patient/P011"},
+             "code": {"coding": [{"display": "Physical Exam — Lungs"}]},
+             "valueString": "Bilateral basal Velcro-like inspiratory crackles. Digital clubbing bilateral. "
+                            "No wheeze, no stridor. RR 22 at rest. SpO2 89% on room air, 94% on 2L NC.",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O111", "subject": {"reference": "Patient/P011"},
+             "code": {"coding": [{"display": "Pulmonary Function Tests (spirometry + DLCO)"}]},
+             "valueString": "FVC 62% predicted (↓↓). FEV1/FVC 0.82 (preserved ratio). DLCO 48% predicted (severely reduced). "
+                            "Pattern: RESTRICTIVE with impaired gas transfer.",
+             "effectiveDateTime": (now - timedelta(days=7)).isoformat()},
+            {"resourceType": "Observation", "id": "O112", "subject": {"reference": "Patient/P011"},
+             "code": {"coding": [{"display": "Chest X-ray"}]},
+             "valueString": "Bilateral lower lobe reticular infiltrates with honeycombing pattern peripherally. "
+                            "No pleural effusion. No hilar lymphadenopathy. Lung volumes reduced.",
+             "effectiveDateTime": (now - timedelta(days=14)).isoformat()},
+            {"resourceType": "Observation", "id": "O113", "subject": {"reference": "Patient/P011"},
+             "code": {"coding": [{"display": "6-Minute Walk Test"}]},
+             "valueQuantity": {"value": 320, "unit": "meters (↓↓, desaturation to 84% at end)"},
+             "effectiveDateTime": (now - timedelta(days=7)).isoformat()},
+            {"resourceType": "Observation", "id": "O114", "subject": {"reference": "Patient/P011"},
+             "code": {"coding": [{"display": "Occupational & Exposure History"}]},
+             "valueString": "Woodworker × 30 years (hardwood dust exposure). Non-smoker. "
+                            "Pet birds (2 parakeets) × 8 years. No asbestos exposure. No silica.",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O115", "subject": {"reference": "Patient/P011"},
+             "code": {"coding": [{"display": "Lab Panel"}]},
+             "valueString": "LDH 287 U/L (↑). ANA negative. ANCA negative. Anti-CCP negative. "
+                            "Hypersensitivity pneumonitis panel: anti-bird precipitins PENDING. "
+                            "CBC: normal. BMP: normal.",
+             "effectiveDateTime": now.isoformat()},
+        ]
+        self.images["P011"] = [
+            {"url": "/static/images/chest_xray_bilateral_infiltrates.png",
+             "modality": "xray",
+             "timestamp": (now - timedelta(days=14)).isoformat(),
+             "analysis": "Bilateral lower-lobe predominant reticular opacities with peripheral and basal distribution. "
+                         "Honeycombing visible in posterior basal segments bilaterally. "
+                         "Traction bronchiectasis. No pleural effusion. Lung volume loss. "
+                         "Pattern highly suggestive of Usual Interstitial Pneumonia (UIP) / IPF. "
+                         "Differential includes fibrotic hypersensitivity pneumonitis or other fibrosing ILD."},
+        ]
+
+        # ── P012: Amara Osei — Dermatomyositis (Rare Disease Hunt) ───────────
+        self.patients["P012"] = {
+            "resourceType": "Patient", "id": "P012",
+            "name": [{"family": "Osei", "given": ["Amara"]}],
+            "gender": "female", "birthDate": "2002-09-15",
+            "address": [{"city": "Atlanta", "state": "GA"}],
+            "encounter_type": "outpatient", "hospital_id": "COMMUNITY",
+        }
+        self.conditions["P012"] = [
+            {"resourceType": "Condition", "id": "C120", "subject": {"reference": "Patient/P012"},
+             "code": {"coding": [{"display": "Proximal muscle weakness — bilateral, symmetric × 5 months (arms + legs)"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=150)).isoformat()},
+            {"resourceType": "Condition", "id": "C121", "subject": {"reference": "Patient/P012"},
+             "code": {"coding": [{"display": "Heliotrope rash — periorbital violaceous discoloration"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=120)).isoformat()},
+            {"resourceType": "Condition", "id": "C122", "subject": {"reference": "Patient/P012"},
+             "code": {"coding": [{"display": "Gottron's papules — violaceous papules over MCP/PIP joints bilaterally"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=100)).isoformat()},
+            {"resourceType": "Condition", "id": "C123", "subject": {"reference": "Patient/P012"},
+             "code": {"coding": [{"display": "Dysphagia — progressive, solids then liquids × 4 weeks"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=28)).isoformat()},
+            {"resourceType": "Condition", "id": "C124", "subject": {"reference": "Patient/P012"},
+             "code": {"coding": [{"display": "Photosensitivity — V-sign erythema, shawl sign"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=90)).isoformat()},
+        ]
+        self.medications["P012"] = [
+            {"resourceType": "MedicationStatement", "id": "M120", "subject": {"reference": "Patient/P012"},
+             "medicationCodeableConcept": {"coding": [{"display": "No current medications"}]},
+             "status": "active", "dosage": [{"text": "None — previously healthy college student"}]},
+        ]
+        self.allergies["P012"] = [
+            {"resourceType": "AllergyIntolerance", "id": "A120",
+             "patient": {"reference": "Patient/P012"},
+             "code": {"coding": [{"display": "Sulfonamides"}]},
+             "reaction": [{"manifestation": [{"coding": [{"display": "Rash"}]}],
+                           "severity": "mild"}]},
+        ]
+        self.observations["P012"] = [
+            {"resourceType": "Observation", "id": "O120", "subject": {"reference": "Patient/P012"},
+             "code": {"coding": [{"display": "Muscle Strength (Manual Muscle Testing)"}]},
+             "valueString": "Shoulder abduction 3/5 bilaterally. Hip flexion 3+/5 bilaterally. "
+                            "Cannot rise from chair without arms. Neck flexion 3/5. Distal strength preserved.",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O121", "subject": {"reference": "Patient/P012"},
+             "code": {"coding": [{"display": "CK (Creatine Kinase)"}]},
+             "valueQuantity": {"value": 4200, "unit": "U/L (↑↑↑ — normal <170)"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O122", "subject": {"reference": "Patient/P012"},
+             "code": {"coding": [{"display": "Aldolase / Liver enzymes"}]},
+             "valueString": "Aldolase 28 U/L (↑, normal <7.6). AST 78, ALT 82 (muscle-source elevations).",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O123", "subject": {"reference": "Patient/P012"},
+             "code": {"coding": [{"display": "Autoimmune Panel"}]},
+             "valueString": "ANA: 1:320 positive (nucleolar pattern). Anti-Jo-1: NEGATIVE. "
+                            "Anti-Mi-2: PENDING. Anti-MDA5: PENDING. Anti-TIF1γ: PENDING (malignancy-associated DM screen).",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O124", "subject": {"reference": "Patient/P012"},
+             "code": {"coding": [{"display": "EMG (Electromyography)"}]},
+             "valueString": "Abnormal spontaneous activity (fibrillations + positive sharp waves) in proximal muscles. "
+                            "Short-duration, low-amplitude motor unit potentials. Pattern: inflammatory myopathy.",
+             "effectiveDateTime": (now - timedelta(days=3)).isoformat()},
+            {"resourceType": "Observation", "id": "O125", "subject": {"reference": "Patient/P012"},
+             "code": {"coding": [{"display": "CXR / Pulmonary screening"}]},
+             "valueString": "CXR: mild interstitial changes bilateral lower lobes (ILD screen for anti-synthetase). "
+                            "PFTs pending.",
+             "effectiveDateTime": now.isoformat()},
+        ]
+
+        # ── P013: Ethan Park — McArdle disease / metabolic myopathy (Rare Disease Hunt) ─
+        self.patients["P013"] = {
+            "resourceType": "Patient", "id": "P013",
+            "name": [{"family": "Park", "given": ["Ethan"]}],
+            "gender": "male", "birthDate": "2007-03-22",
+            "address": [{"city": "Seattle", "state": "WA"}],
+            "encounter_type": "outpatient", "hospital_id": "PEDIATRIC",
+        }
+        self.conditions["P013"] = [
+            {"resourceType": "Condition", "id": "C130", "subject": {"reference": "Patient/P013"},
+             "code": {"coding": [{"display": "Exercise-induced muscle pain + cramping — onset 5–10 min into sustained exercise"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=730)).isoformat()},
+            {"resourceType": "Condition", "id": "C131", "subject": {"reference": "Patient/P013"},
+             "code": {"coding": [{"display": "Myoglobinuria — dark cola urine after exertion × 3 episodes (rhabdomyolysis risk)"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=180)).isoformat()},
+            {"resourceType": "Condition", "id": "C132", "subject": {"reference": "Patient/P013"},
+             "code": {"coding": [{"display": "'Second-wind' phenomenon — improvement after brief rest then resuming exercise"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=730)).isoformat()},
+            {"resourceType": "Condition", "id": "C133", "subject": {"reference": "Patient/P013"},
+             "code": {"coding": [{"display": "Fixed proximal weakness (mild, emerging)"}]},
+             "clinicalStatus": {"coding": [{"code": "active"}]},
+             "onsetDateTime": (now - timedelta(days=90)).isoformat()},
+        ]
+        self.medications["P013"] = [
+            {"resourceType": "MedicationStatement", "id": "M130", "subject": {"reference": "Patient/P013"},
+             "medicationCodeableConcept": {"coding": [{"display": "No medications — advised exercise restriction"}]},
+             "status": "active", "dosage": [{"text": "Activity restriction: avoid sustained isometric exercise"}]},
+        ]
+        self.allergies["P013"] = [
+            {"resourceType": "AllergyIntolerance", "id": "A130",
+             "patient": {"reference": "Patient/P013"},
+             "code": {"coding": [{"display": "No known drug allergies"}]},
+             "reaction": [{"manifestation": [{"coding": [{"display": "NKDA"}]}]}]},
+        ]
+        self.observations["P013"] = [
+            {"resourceType": "Observation", "id": "O130", "subject": {"reference": "Patient/P013"},
+             "code": {"coding": [{"display": "CK (Creatine Kinase) — during episode vs baseline"}]},
+             "valueQuantity": {"value": "12,400 during episode / 280 baseline", "unit": "U/L"},
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O131", "subject": {"reference": "Patient/P013"},
+             "code": {"coding": [{"display": "Ischemic Forearm Exercise Test (modified non-ischemic)"}]},
+             "valueString": "Ammonia: normal rise (5× baseline). Lactate: FLAT RESPONSE — no rise after exercise. "
+                            "Highly abnormal — consistent with glycogenolysis/glycolysis defect.",
+             "effectiveDateTime": (now - timedelta(days=7)).isoformat()},
+            {"resourceType": "Observation", "id": "O132", "subject": {"reference": "Patient/P013"},
+             "code": {"coding": [{"display": "Urinalysis (during episode)"}]},
+             "valueString": "Dipstick: strongly positive for blood (absence of RBCs on microscopy = myoglobinuria). "
+                            "Myoglobin: markedly elevated.",
+             "effectiveDateTime": (now - timedelta(days=30)).isoformat()},
+            {"resourceType": "Observation", "id": "O133", "subject": {"reference": "Patient/P013"},
+             "code": {"coding": [{"display": "Muscle MRI (thigh)"}]},
+             "valueString": "Patchy T2 hyperintensity in posterior thigh compartment (active myopathy). "
+                            "No significant fatty infiltration (early disease).",
+             "effectiveDateTime": (now - timedelta(days=14)).isoformat()},
+            {"resourceType": "Observation", "id": "O134", "subject": {"reference": "Patient/P013"},
+             "code": {"coding": [{"display": "PYGM Gene Testing (myophosphorylase)"}]},
+             "valueString": "PENDING — Homozygous p.R50X variant expected (most common McArdle mutation)",
+             "effectiveDateTime": now.isoformat()},
+            {"resourceType": "Observation", "id": "O135", "subject": {"reference": "Patient/P013"},
+             "code": {"coding": [{"display": "Family & Social History"}]},
+             "valueString": "High school cross-country runner. No family history of metabolic disease (parents asymptomatic — likely carriers). "
+                            "No toxic exposures, no medications, no alcohol.",
+             "effectiveDateTime": now.isoformat()},
+        ]
 
     def _load_data(self, data_path: "Path"):
         """Load patient data from JSON file."""

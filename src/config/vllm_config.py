@@ -15,17 +15,17 @@ _env = os.environ.get("VLLM_ENV", "local").lower()
 # ── LOCAL CONFIGURATION (RTX 5060 8GB, batch_size=1) ────────────────────────
 VLLM_LOCAL_CONFIG = {
     "tensor_parallel_size": 1,
-    "gpu_memory_utilization": 0.85,
+    "gpu_memory_utilization": 0.92,
     "max_model_len": 2048,              # Simulation context <= 2K tokens
     "max_num_batched_tokens": 512,      # Short patient responses (50-150 tokens)
     "max_num_seqs": 1,                  # Single request only
     "dtype": "bfloat16",
     "quantization": "bitsandbytes",
-    "enforce_eager": True,
+    "enforce_eager": False,             # Enable CUDA graphs for 2-3x faster decode
     "enable_vision": True,
     "limit_mm_per_prompt": {"image": 1},
-    "enable_chunked_prefill": True,     
-    "enable_prefix_caching": True,                  
+    "enable_chunked_prefill": True,
+    "enable_prefix_caching": True,
 }
 
 # Performance expectations (Local):
@@ -38,13 +38,13 @@ VLLM_LOCAL_CONFIG = {
 # ── PRODUCTION CONFIGURATION (Higher throughput) ─────────────────────────────
 VLLM_PRODUCTION_CONFIG = {
     "tensor_parallel_size": 1,
-    "gpu_memory_utilization": 0.9,
+    "gpu_memory_utilization": 0.92,
     "max_model_len": 4096,              # Full clinical context
     "max_num_batched_tokens": 1024,     # Can batch multiple requests
     "max_num_seqs": 4,                  # Allow 4 concurrent requests
     "dtype": "bfloat16",
     "quantization": "bitsandbytes",
-    "enforce_eager": True,
+    "enforce_eager": False,             # Enable CUDA graphs for faster decode
     "enable_vision": True,
     "limit_mm_per_prompt": {"image": 1},
     "enable_chunked_prefill": True,     # ← Reduce peak memory during batched prefill
