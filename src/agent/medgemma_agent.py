@@ -401,6 +401,31 @@ Example for a chest X-ray with right lower lobe opacity:
                 if alternation_count >= 8:
                     return '\n'.join(lines[:i])
 
+        # Pattern 3: Multi-line block repeated 3+ times
+        for block_size in range(2, 6):
+            for start in range(len(lines) - block_size * 3):
+                block = '\n'.join(line.strip() for line in lines[start:start + block_size])
+                if len(block.strip()) < 20:
+                    continue
+                repeat_count = 1
+                pos = start + block_size
+                while pos + block_size <= len(lines):
+                    candidate = '\n'.join(line.strip() for line in lines[pos:pos + block_size])
+                    if candidate == block:
+                        repeat_count += 1
+                        pos += block_size
+                    else:
+                        if pos < len(lines) and lines[pos].strip() == '':
+                            candidate2 = '\n'.join(line.strip() for line in lines[pos + 1:pos + 1 + block_size])
+                            if candidate2 == block:
+                                repeat_count += 1
+                                pos += 1 + block_size
+                                continue
+                        break
+                if repeat_count >= 3:
+                    cut = start + block_size * 2
+                    return '\n'.join(lines[:min(cut, len(lines))])
+
         return response
 
     def _extract_findings_from_response(self, response: str) -> list[str]:

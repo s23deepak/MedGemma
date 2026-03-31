@@ -268,43 +268,37 @@ class VLLMModelManager:
         )
 
         if image is not None and self.enable_vision:
-            import tempfile
-            from pathlib import Path
-
             try:
-                # Save PIL image to temp file for vLLM
-                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                    tmp_path = tmp.name
-                    image.save(tmp_path, format="JPEG")
-
-                logger.debug(f"Saved image to {tmp_path} for multimodal processing")
-
-                try:
-                    # vLLM multimodal format: pass request dict with image in multi_modal_data
-                    outputs = self._vllm_engines["medgemma"].generate(
-                        [
-                            {
-                                "prompt": prompt,
-                                "multi_modal_data": {"image": tmp_path}
-                            }
-                        ],
-                        sampling_params
-                    )
-                    result = outputs[0].outputs[0].text
-                    # FILTER: Detect and truncate infinite repetitions (model stuck in loop)
-                    result = self._truncate_infinite_repetition(result)
-                    logger.debug(f"Vision analysis completed ({len(result)} chars)")
-                    return result
-
-                finally:
-                    # Always clean up temp file
-                    try:
-                        Path(tmp_path).unlink()
-                    except Exception as cleanup_err:
-                        logger.debug(f"Failed to clean up temp image: {cleanup_err}")
+                # vLLM multimodal: pass PIL image directly in multi_modal_data
+                outputs = self._vllm_engines["medgemma"].generate(
+                    [
+                        {
+                            "prompt": prompt,
+                            "multi_modal_data": {"image": image}
+                        }
+                    ],
+                    sampling_params
+                )
+                result = outputs[0].outputs[0].text
+                # FILTER: Detect and truncate infinite repetitions (model stuck in loop)
+                result = self._truncate_infinite_repetition(result)
+                logger.debug(f"Vision analysis completed ({len(result)} chars)")
+                return result
 
             except Exception as e:
                 logger.warning(f"Multimodal analysis failed ({type(e).__name__}: {e}), falling back to text-only")
+                # Strip image-analysis instructions from prompt for text-only fallback
+                import re
+                prompt = re.sub(
+                    r'Analyze this \w+ image[\.,]?\s*',
+                    '',
+                    prompt
+                )
+                prompt = re.sub(
+                    r'focusing on the annotated region\(s\)[\.,]?\s*',
+                    '',
+                    prompt
+                )
                 # Fallback: analyze based on prompt context only (no image)
                 outputs = self._vllm_engines["medgemma"].generate([prompt], sampling_params)
                 result = outputs[0].outputs[0].text
@@ -320,6 +314,92 @@ class VLLMModelManager:
                 )
             outputs = self._vllm_engines["medgemma"].generate([prompt], sampling_params)
             return outputs[0].outputs[0].text
+
+    def _truncate_infinite_repetition(self, response: str) -> str:
+        """Detect and truncate infinite repetition patterns (model stuck in loop)."""
+        lines = response.split('\n')
+        if len(lines) < 5:
+            return response
+
+        # Pattern 1: Same line repeated 5+ times consecutively
+        line_counts = {}
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped and len(stripped) > 10:
+                if i > 0 and lines[i-1].strip() == stripped:
+                    if stripped not in line_counts:
+                        line_counts[stripped] = 0
+                    line_counts[stripped] += 1
+
+        for repeated_line, count in line_counts.items():
+            if count >= 5:
+                for i, line in enumerate(lines):
+                    if line.strip() == repeated_line and i > 0:
+                        is_repetition = all(
+                            lines[i+j].strip() == repeated_line
+                            for j in range(1, min(4, len(lines)-i))
+                        )
+                        if is_repetition:
+                            return '\n'.join(lines[:i])
+
+        # Pattern 2: Two lines alternating 4+ times (A, B, A, B, A, B, A, B)
+        for i in range(len(lines) - 7):
+            stripped_i = lines[i].strip()
+            if not stripped_i or len(stripped_i) <= 10:
+                continue
+            for j in range(i + 1, min(i + 4, len(lines))):
+                stripped_j = lines[j].strip()
+                if not stripped_j or len(stripped_j) <= 10:
+                    continue
+                alternation_count = 0
+                expect_i = True
+                for k in range(i, min(i + 8, len(lines))):
+                    curr = lines[k].strip()
+                    if expect_i:
+                        if curr == stripped_i:
+                            alternation_count += 1
+                            expect_i = False
+                        else:
+                            break
+                    else:
+                        if curr == stripped_j:
+                            alternation_count += 1
+                            expect_i = True
+                        else:
+                            break
+                if alternation_count >= 8:
+                    return '\n'.join(lines[:i])
+
+        # Pattern 3: Multi-line block repeated 3+ times
+        # Join non-empty lines into blocks separated by blank lines, detect repeating blocks
+        text = response.strip()
+        for block_size in range(2, 6):  # check 2-5 line blocks
+            for start in range(len(lines) - block_size * 3):
+                block = '\n'.join(line.strip() for line in lines[start:start + block_size])
+                if len(block.strip()) < 20:
+                    continue
+                repeat_count = 1
+                pos = start + block_size
+                while pos + block_size <= len(lines):
+                    candidate = '\n'.join(line.strip() for line in lines[pos:pos + block_size])
+                    if candidate == block:
+                        repeat_count += 1
+                        pos += block_size
+                    else:
+                        # Allow skipping one blank line between blocks
+                        if pos < len(lines) and lines[pos].strip() == '':
+                            candidate2 = '\n'.join(line.strip() for line in lines[pos + 1:pos + 1 + block_size])
+                            if candidate2 == block:
+                                repeat_count += 1
+                                pos += 1 + block_size
+                                continue
+                        break
+                if repeat_count >= 3:
+                    # Keep up to first occurrence + one repeat
+                    cut = start + block_size * 2
+                    return '\n'.join(lines[:min(cut, len(lines))])
+
+        return response
 
     def generate_functiongemma(
         self,

@@ -5,13 +5,13 @@
       "asthma",
       "bronchitis",
       "dyspnea",
-      "nausea",
       "smoke inhalation injury",
       "water pollution"
     ],
     "infectious_outbreak": [
       "communicable diseases",
       "covid-19",
+      "dehydration",
       "influenza",
       "norovirus infections",
       "respiratory syncytial virus infections",
@@ -20,7 +20,8 @@
     "heat_risk": [
       "dehydration",
       "heat stress disorders",
-      "heat stroke"
+      "heat stroke",
+      "respiratory syncytial virus infections"
     ],
     "water_contamination": [
       "air pollution",
@@ -70,7 +71,7 @@
       "headache"
     ]
   },
-  "fetched_at": "2026-03-30T00:23:02.207058+00:00",
+  "fetched_at": "2026-03-31T00:46:31.894500+00:00",
   "source": "NLM MeSH Lookup API",
   "vector_enrichment": {
     "backend": "in_memory",

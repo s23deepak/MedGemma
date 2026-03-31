@@ -1784,8 +1784,8 @@ def extract_clinical_meta(response_text: str) -> tuple[dict | None, str]:
                 "confidence": inner.get("confidence", "moderate") if inner.get("confidence") in ("high", "moderate", "low") else "moderate",
                 "suggested_actions": [str(a) for a in inner.get("suggested_actions", []) if a and str(a).strip() != "..."],
             }
-            # Strip the JSON line from visible response
-            cleaned = response_text[:match.start()].rstrip()
+            # Strip ALL occurrences of the JSON block from visible response
+            cleaned = re.sub(pattern, '', response_text, flags=re.DOTALL).rstrip()
     except (json.JSONDecodeError, Exception) as e:
         logger.debug(f"clinical_meta extraction failed: {e}")
 
