@@ -1,0 +1,21 @@
+# Hardware overlay — 4× NVIDIA L4 Ada 24 GB = 96 GB total, 27B model
+# High-throughput: 32 concurrent sequences, 64K context, ~200-300 ms/req
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.4xl4.yml \
+#                  --env-file .env --env-file .env.4xl4 up -d
+
+services:
+  medgemma:
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 4          # tensor_parallel_size=4 in vllm_config
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - VLLM_ENV=4xl4
+      - VLLM_MODEL=google/medgemma-27b-it

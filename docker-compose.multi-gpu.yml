@@ -1,0 +1,20 @@
+# Hardware overlay — 2× GPU (2× L4 = 48 GB  or  2× A6000 = 96 GB), 27B model
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.multi-gpu.yml \
+#                  --env-file .env --env-file .env.multi-gpu up -d
+
+services:
+  medgemma:
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 2          # tensor_parallel_size=2 in vllm_config
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - VLLM_ENV=multi_gpu
+      - VLLM_MODEL=google/medgemma-27b-it

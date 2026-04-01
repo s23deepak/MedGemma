@@ -1,0 +1,61 @@
+# ── Python artifacts ──────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environment (rebuilt inside container) ────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Secrets (injected at runtime, never baked into the image) ─────────────────
+.env
+firebase-key.json
+*.key
+*.pem
+
+# ── Git ───────────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+
+# ── Runtime data (mounted as volumes) ────────────────────────────────────────
+uploads/
+
+# ── Development & IDE ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# ── Claude Code config ────────────────────────────────────────────────────────
+.claude/
+AGENTS.md
+
+# ── Docs & notebooks (not needed at runtime) ─────────────────────────────────
+docs/
+notebooks/
+*.md
+!README.md
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+tests/
+test_*.py
+
+# ── Logs & crash dumps ────────────────────────────────────────────────────────
+*.log
+crash.log
+*.jsonl
+
+# ── Large assets not needed in image ─────────────────────────────────────────
+write-up images/
+spaces/
+
+# ── Lock file copy ────────────────────────────────────────────────────────────
+uv copy.lock

@@ -1,0 +1,20 @@
+# Hardware overlay — NVIDIA L4 Ada 24 GB (single GPU, 4B model)
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.l4.yml \
+#                  --env-file .env --env-file .env.l4 up -d
+
+services:
+  medgemma:
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - VLLM_ENV=l4
+      - VLLM_MODEL=google/medgemma-1.5-4b-it

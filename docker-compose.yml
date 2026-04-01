@@ -1,0 +1,110 @@
+name: medgemma
+
+# Base configuration — hardware-neutral.
+# Layer a hardware override on top when deploying:
+#
+#   Local dev (auto-loaded):
+#     docker compose up
+#
+#   L4 cloud:
+#     docker compose -f docker-compose.yml -f docker-compose.l4.yml \
+#                    --env-file .env --env-file .env.l4 up -d
+#
+#   A100 cloud (27B):
+#     docker compose -f docker-compose.yml -f docker-compose.a100.yml \
+#                    --env-file .env --env-file .env.a100 up -d
+#
+#   2× GPU (27B):
+#     docker compose -f docker-compose.yml -f docker-compose.multi-gpu.yml \
+#                    --env-file .env --env-file .env.multi-gpu up -d
+#
+#   4× L4 (27B, high-throughput):
+#     docker compose -f docker-compose.yml -f docker-compose.4xl4.yml \
+#                    --env-file .env --env-file .env.4xl4 up -d
+
+services:
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # MedGemma Clinical Assistant
+  # ───────────────────────────────────────────────────────────────────────────
+  medgemma:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: medgemma-assistant:latest
+    container_name: medgemma
+
+    # Secrets & API keys (sourced from .env on the host — never committed)
+    env_file:
+      - .env
+
+    # Runtime constants that are the same on every hardware target
+    environment:
+      - FIREBASE_KEY_PATH=/run/secrets/firebase_key
+      - HF_HOME=/cache/huggingface
+
+    # ── Volumes ───────────────────────────────────────────────────────────
+    volumes:
+      # HuggingFace model cache — survives container rebuilds
+      - hf_cache:/cache/huggingface
+      # User uploads at runtime
+      - uploads:/app/uploads
+      # Firebase service account key (read-only bind mount)
+      - ./firebase-key.json:/run/secrets/firebase_key:ro
+
+    # ── Ports ─────────────────────────────────────────────────────────────
+    ports:
+      - "8000:8000"   # FastAPI application
+      - "8001:8001"   # Prometheus metrics endpoint
+
+    # ── Health & restart ──────────────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s    # vLLM model load takes ~30-60s on first boot
+    restart: unless-stopped
+
+    # ── Logging ───────────────────────────────────────────────────────────
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Prometheus — scrapes /metrics on port 8001
+  # ───────────────────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: medgemma-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      medgemma:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+# ── Named volumes ──────────────────────────────────────────────────────────────
+volumes:
+  hf_cache:
+    driver: local
+  uploads:
+    driver: local
+  prometheus_data:
+    driver: local

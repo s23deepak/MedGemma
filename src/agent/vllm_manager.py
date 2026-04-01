@@ -15,6 +15,7 @@ Sleep levels:
 
 import asyncio
 import logging
+import os
 import time
 from collections import deque
 from pathlib import Path
@@ -74,7 +75,7 @@ class VLLMModelManager:
                  enable_vision=False skips encoder entirely (no profiling at all)
     """
 
-    MEDGEMMA_ID = "google/medgemma-1.5-4b-it"
+    MEDGEMMA_ID = os.environ.get("VLLM_MODEL", "google/medgemma-1.5-4b-it")
     FUNCTIONGEMMA_ID = "google/functiongemma-270m-it"
 
     def __init__(
